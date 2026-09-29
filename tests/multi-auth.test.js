@@ -101,11 +101,11 @@ test("new authorizations never merge upstream identity; reauthorization targets 
   const access = `a.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "shared-upstream" } })).toString("base64url")}.b`;
   const f = fixture(t, schema(), () => response(token(access)));
   const first = await authorize(f.auth);
-  const second = await authorize(f.auth, "openai-codex", { label: "  工作账号  " });
+  const second = await authorize(f.auth);
   const [a, b] = second.accounts;
   assert.notEqual(a.id, b.id); assert.notEqual(a.id, "shared-upstream");
   assert.equal(a.id, first.login.accountId); assert.equal(b.id, second.login.accountId);
-  assert.equal(a.label, "openai-codex 1"); assert.equal(b.label, "工作账号");
+  assert.equal(a.label, "openai-codex 1"); assert.equal(b.label, "openai-codex 2");
   assert.equal(a.priority, 1); assert.equal(b.priority, 2);
   assert.deepEqual(Object.keys(a).sort(), ["connected", "id", "label", "priority", "vendor"]);
   assert.equal((await f.auth.credential(a.id)).accountId, "shared-upstream");
@@ -114,14 +114,14 @@ test("new authorizations never merge upstream identity; reauthorization targets 
   const before = structuredClone(f.saved.accounts[0]);
   const again = await authorize(f.auth, "openai-codex", { accountId: b.id });
   assert.equal(again.login.accountId, b.id); assert.equal(again.accounts.length, 2);
-  assert.deepEqual(f.saved.accounts[0], before); assert.equal(again.accounts[1].label, "工作账号");
+  assert.deepEqual(f.saved.accounts[0], before); assert.equal(again.accounts[1].label, "openai-codex 2");
   const removed = await f.auth.logout(a.id);
   assert.deepEqual(removed.accounts, [{ ...b, priority: 1 }]);
   assert.equal(await f.auth.credential(a.id), null);
   assert.equal((await f.auth.credential(b.id)).token, access);
 });
 
-test("rename and vendor-local ordering persist through encrypted restart and legacy migration", async (t) => {
+test("vendor-local ordering persists through encrypted restart and legacy migration", async (t) => {
   const root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR, "quota-multi-auth-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = createAuthStore(async () => root);
@@ -131,7 +131,7 @@ test("rename and vendor-local ordering persist through encrypted restart and leg
   await authorize(f.auth, "anthropic");
   const added = await authorize(f.auth);
   const id = added.login.accountId;
-  assert.equal((await f.auth.rename(id, "  备用 😀  ")).accounts.at(-1).label, "备用 😀");
+  assert.equal(added.accounts.at(-1).label, "openai-codex 2");
   const moved = await f.auth.move(id, "up");
   assert.deepEqual(moved.accounts.map((a) => [a.id, a.priority]),
     [[id, 1], [added.accounts[1].id, 1], ["legacy-openai-codex", 2]]);
@@ -146,24 +146,19 @@ test("rename and vendor-local ordering persist through encrypted restart and leg
   assert.equal((await restarted.auth.credential(id)).token, "mock-new");
 });
 
-test("exact internal ids, vendor matching, labels and movement are validated", async (t) => {
+test("exact internal ids, vendor matching and movement are validated", async (t) => {
   const f = fixture(t, schema(record("one"), record("two", "anthropic")));
   const before = structuredClone(f.saved);
   for (const id of [undefined, null, {}, "", "unknown", "openai-codex", "anthropic", "github-copilot", "upstream-one", "__proto__"]) {
     assert.equal(await f.auth.credential(id), null);
     await assert.rejects(f.auth.logout(id), { code: "INVALID_ARGUMENT" });
-    await assert.rejects(f.auth.rename(id, "valid"), { code: "INVALID_ARGUMENT" });
+    await assert.rejects(f.auth.move(id, "up"), { code: "INVALID_ARGUMENT" });
     await assert.rejects(f.auth.move(id, "up"), { code: "INVALID_ARGUMENT" });
     if (id !== undefined) await assert.rejects(f.auth.start("openai-codex", { accountId: id }), { code: "INVALID_ARGUMENT" });
   }
   await assert.rejects(f.auth.start("anthropic", { accountId: "one" }), { code: "INVALID_ARGUMENT" });
   await assert.rejects(f.auth.move("one", "left"), { code: "INVALID_ARGUMENT" });
-  for (const label of [null, 1, "", "  ", "x".repeat(81)]) {
-    await assert.rejects(f.auth.rename("one", label), { code: "INVALID_ARGUMENT" });
-    await assert.rejects(f.auth.start("openai-codex", { label }), { code: "INVALID_ARGUMENT" });
-  }
   assert.deepEqual(f.saved, before); assert.equal(f.saves, 0);
-  assert.equal((await f.auth.rename("one", `  ${"x".repeat(80)}  `)).accounts[0].label.length, 80);
 });
 
 test("ten-account limit is per vendor and does not block reauthorization", async (t) => {
@@ -172,9 +167,9 @@ test("ten-account limit is per vendor and does not block reauthorization", async
   assert.equal(f.saved.accounts.length, 10);
   await assert.rejects(f.auth.start("openai-codex"), { code: "INVALID_ARGUMENT" });
   await authorize(f.auth, "anthropic");
-  await authorize(f.auth, "openai-codex", { accountId: "id-0", label: "reauthorized" });
+  await authorize(f.auth, "openai-codex", { accountId: "id-0" });
   assert.equal(f.saved.accounts.length, 11);
-  assert.equal(f.saved.accounts[0].label, "reauthorized");
+  assert.equal(f.saved.accounts[0].label, "Label id-0");
   await f.auth.logout("id-1");
   await authorize(f.auth);
   assert.equal(f.saved.accounts.length, 11);
@@ -197,20 +192,19 @@ test("refreshes deduplicate per account; deleting one does not cancel its siblin
   assert.equal(await f.auth.credential("one"), null);
 });
 
-for (const firstWrite of ["refresh", "rename"]) test(`serialized ${firstWrite}-first writes preserve labels, ordering and refresh rotation`, async (t) => {
+test("serialized refresh-first writes preserve ordering and refresh rotation", async (t) => {
   const f = fixture(t, schema(record("one"), record("other", "anthropic"), record("two")));
   await f.auth.status();
   const gate = deferred(); let blocked = false;
   f.store.beforeSave = async () => { if (!blocked) { blocked = true; await gate.promise; } };
-  const first = firstWrite === "refresh" ? f.auth.credential("one") : f.auth.rename("one", "renamed");
+  const first = f.auth.credential("one");
   await flush(); assert.equal(blocked, true);
-  const rest = [f.auth.move("two", "up"), firstWrite === "refresh" ? f.auth.rename("one", "renamed") : f.auth.credential("one"), f.auth.credential("two")];
+  const rest = [f.auth.move("two", "up"), f.auth.credential("one"), f.auth.credential("two")];
   await flush(); assert.equal(f.saves, 1);
   gate.resolve();
   await Promise.all([first, ...rest]);
   assert.equal(f.maxSaving, 1);
   assert.deepEqual(f.saved.accounts.map((a) => a.id), ["two", "other", "one"]);
-  assert.equal(f.saved.accounts[2].label, "renamed");
   assert.equal(f.saved.accounts[2].credential.refresh, "refresh-mock-new");
   assert.equal(f.saved.accounts[0].credential.refresh, "refresh-mock-new");
   assert.deepEqual(f.saved.accounts[1], record("other", "anthropic"));
@@ -245,15 +239,15 @@ test("cancelled reauthorization during save rolls back only that change and pres
   f.store.beforeSave = async () => { if (count++ === 0) await gate.promise; };
   const submitted = f.auth.submit(login.id, redirect(login));
   await flush();
-  const renamed = f.auth.rename("two", "kept");
   const moved = f.auth.move("two", "up");
+  const movedAgain = f.auth.move("two", "up");
   await f.auth.cancel(login.id);
   gate.resolve();
   assert.equal((await submitted).login.status, "cancelled");
-  await Promise.all([renamed, moved]);
+  await Promise.all([moved, movedAgain]);
   assert.equal(f.maxSaving, 1);
   assert.deepEqual(f.saved.accounts[1], record("one"));
-  assert.equal(f.saved.accounts[0].id, "two"); assert.equal(f.saved.accounts[0].label, "kept");
+  assert.equal(f.saved.accounts[0].id, "two");
 });
 
 test("logout of a pending new account during save cannot revive it or affect existing accounts", async (t) => {
@@ -280,7 +274,7 @@ test("stop during login disk write rolls back and blocks subsequent mutations an
   const stopped = f.auth.stop();
   gate.resolve(); await Promise.all([submitted, stopped]);
   assert.deepEqual(f.saved, schema(record("one")));
-  for (const operation of [() => f.auth.start("anthropic"), () => f.auth.rename("one", "no"),
+  for (const operation of [() => f.auth.start("anthropic"),
     () => f.auth.move("one", "up"), () => f.auth.logout("one"), () => f.auth.credential("one")])
     await assert.rejects(operation(), { code: "AUTH_CANCELLED" });
   assert.deepEqual(f.saved, schema(record("one")));
@@ -308,7 +302,7 @@ test("device accounts are independent and late cancelled polling never adds an a
   const f = fixture(t, schema(record("github-one", "github-copilot")), (input) =>
     input.url.endsWith("/device/code") ? response({ device_code: "mock-private-device", user_code: "MOCK-CODE", expires_in: 600, interval: 5 })
       : ++poll === 1 ? response({ access_token: "mock-new-github" }) : gate.promise);
-  const first = await f.auth.start("github-copilot", { label: "second" });
+  const first = await f.auth.start("github-copilot");
   t.mock.timers.tick(5000); await flush();
   assert.equal((await f.auth.credential(first.login.accountId)).token, "mock-new-github");
   assert.equal((await f.auth.credential("github-one")).token, "access-github-one");
@@ -345,12 +339,33 @@ test("new credential refresh never joins a stale refresh started during reauthor
 test("failed metadata writes preserve credentials and do not poison the write queue", async (t) => {
   const f = fixture(t, schema(record("one"), record("two")));
   f.store.beforeSave = () => { throw new Error("mock-save-failure"); };
-  await assert.rejects(f.auth.rename("one", "lost"), { code: "AUTH_STORAGE" });
+  await assert.rejects(f.auth.move("one", "up"), { code: "AUTH_STORAGE" });
   assert.deepEqual(f.saved, schema(record("one"), record("two")));
   assert.equal((await f.auth.listAccounts())[0].label, "Label one");
   f.store.beforeSave = null;
-  await f.auth.rename("one", "kept");
   await f.auth.move("two", "up");
-  assert.equal(f.saved.accounts[1].label, "kept");
+  assert.equal(f.saved.accounts[0].id, "two");
   assert.deepEqual(f.saved.accounts[1].credential, record("one").credential);
+});
+
+test("login stores the ChatGPT id_token email and the Claude token-response email", async (t) => {
+  const idToken = `h.${Buffer.from(JSON.stringify({ email: "user@example.com" })).toString("base64url")}.s`;
+  const codex = fixture(t, schema(), () => response({ ...token("access-codex"), id_token: idToken }));
+  const codexLogin = await authorize(codex.auth, "openai-codex");
+  assert.equal(codex.saved.accounts[0].credential.email, "user@example.com");
+  assert.equal((await codex.auth.credential(codexLogin.login.accountId)).email, "user@example.com");
+  assert.ok(!JSON.stringify(codexLogin).includes("user@example.com"));
+
+  const claude = fixture(t, schema(), () => response({ ...token("access-claude"), account: { uuid: "u1", email_address: "claude@example.com" } }));
+  const claudeLogin = await authorize(claude.auth, "anthropic");
+  assert.equal(claude.saved.accounts[0].credential.email, "claude@example.com");
+  assert.equal((await claude.auth.credential(claudeLogin.login.accountId)).email, "claude@example.com");
+});
+
+test("a token response without identity leaves the credential shape unchanged", async (t) => {
+  const f = fixture(t, schema());
+  const result = await authorize(f.auth, "openai-codex");
+  assert.ok(!("email" in f.saved.accounts[0].credential));
+  assert.deepEqual(await f.auth.credential(result.login.accountId),
+    { token: "mock-new", accountId: null, source: "plugin" });
 });

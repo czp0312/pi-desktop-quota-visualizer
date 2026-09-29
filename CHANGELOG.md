@@ -2,7 +2,14 @@
 
 本文件记录所有用户可见的改动，最新在前。版本遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [0.4.1] - 未发布
+## [0.4.2] - 未发布
+
+- 移除账号备注：账号名只显示检测到的身份，不再支持手填或改名（管理账号里的备注输入框一并移除）。
+- 插件账号自动显示检测到的身份：ChatGPT 用 profile claim 的 name（昵称）作标题、email 显示为卡片 chip；Claude 用 /api/oauth/profile 的 account.email；GitHub Copilot 用额度接口返回的登录名。都拿不到时只显示厂商名，默认编号不再出现在卡片上。
+- 登录时记录账号身份：ChatGPT 从 id_token 的 email claim、Claude 从令牌响应的 account.email_address 保存 email，刷新时沿用；取不到就不写该字段，旧凭据形状不变。
+- 新增 Claude 邮箱查询（同源 GET /api/oauth/profile），失败只丢账号名、不影响额度读取。
+
+## [0.4.1] - 2026-09-29
 
 - 修复添加账号在首次失败、取消或网络异常后无法再次点击的问题。
 - 取消额度页面标题栏吸顶，避免固定遮挡滚动内容。

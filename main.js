@@ -639,6 +639,8 @@ async function claudeCliCredentials() {
         (typeof oauth?.rateLimitTier === "string" && oauth.rateLimitTier) ||
         null,
       expired: expiresAt !== null && expiresAt > 0 && expiresAt < Date.now(),
+      // 可选：新版 Claude Code 凭据里带 emailAddress；没有就交给 /api/oauth/profile。
+      email: typeof oauth?.emailAddress === "string" ? oauth.emailAddress : null,
       source: file,
     };
   }
@@ -657,9 +659,12 @@ async function codexCliCredentials() {
     (typeof data.access_token === "string" && data.access_token) ||
     null;
   if (!token) return null;
+  const profile = openAiProfile(tokens.id_token);
   return {
     token,
     accountId: typeof tokens.account_id === "string" ? tokens.account_id : null,
+    email: profile.email,
+    name: profile.name,
     source: file,
   };
 }
@@ -694,6 +699,69 @@ async function copilotCliCredentials() {
   return null;
 }
 
+// ── 账号身份 ────────────────────────────────────────────────────────────────
+// 界面要显示「这是哪个账号」。这里尽量拿到真实身份：ChatGPT 的 id_token 与 access
+// token 的 profile claim 带 name（昵称）与 email；Claude 的 /api/oauth/profile 返回
+// account.email；Copilot 的额度接口返回 GitHub 登录名。只做本地 JWT 解析或调用同源
+// 服务商接口，不写日志，也不改变凭据存储。
+
+/** 解析 JWT payload；失败或形状不对返回 null。 */
+function jwtClaims(token) {
+  if (typeof token !== "string") return null;
+  const part = token.split(".")[1];
+  if (!part) return null;
+  try {
+    const data = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+  } catch { return null; }
+}
+
+/**
+ * ChatGPT 的 profile claim（id_token 与 access token 都带）：`name` 是账号昵称，
+ * `email` 是登录邮箱。昵称更接近「这是谁」，所以界面优先显示它。
+ */
+function openAiProfile(token) {
+  const claims = jwtClaims(token);
+  const profile = claims?.["https://api.openai.com/profile"];
+  const pick = (value) => (typeof value === "string" && value.trim() && [...value.trim()].length <= 80 ? value.trim() : null);
+  return {
+    name: pick(profile?.name) ?? pick(claims?.name),
+    email: pick(profile?.email) ?? pick(claims?.email),
+  };
+}
+
+/** Claude 邮箱：GET /api/oauth/profile（与额度接口同源）。任何失败都返回 null。 */
+async function anthropicEmail(token) {
+  try {
+    const response = await httpJson("https://api.anthropic.com/api/oauth/profile", {
+      accept: "application/json",
+      authorization: `Bearer ${token}`,
+      "cache-control": "no-cache",
+      "user-agent": "claude-cli/2.1.251",
+    });
+    if (response.status < 200 || response.status >= 300) return null;
+    const account = response.data?.account ?? {};
+    const raw = typeof account.email === "string" ? account.email : account.email_address;
+    const email = typeof raw === "string" ? raw.trim() : "";
+    return email && [...email].length <= 80 ? email : null;
+  } catch { return null; }
+}
+
+/**
+ * 插件账号展示：标题用身份（昵称 / 登录名 / 邮箱），邮箱单独带出去。
+ * 两者都有时界面把邮箱放在卡片 chip 里，避免长邮箱把标题挤成省略号。
+ */
+function pluginAccountDisplay(vendor, identity, email) {
+  const identityText = typeof identity === "string" ? identity.trim() : "";
+  const emailText = typeof email === "string" ? email.trim() : "";
+  return {
+    identity: identityText || null,
+    email: emailText || null,
+    vendorName: vendor.name,
+    label: identityText ? `${vendor.name} · ${identityText}` : vendor.name,
+  };
+}
+
 // ── 服务商 ──────────────────────────────────────────────────────────────────
 //
 // collect(settings) → 账号对象；返回 null 表示「没登录」，界面不显示。
@@ -711,11 +779,16 @@ async function collectAnthropic(settings, _vendor, provided) {
   });
   if (response.status < 200 || response.status >= 300) throw httpError(name, response);
   const windows = anthropicWindows(response.data ?? {});
+  const identity = credential.email ?? await anthropicEmail(credential.token);
+  // Claude 的响应里没有用户昵称，邮箱就是唯一身份；chip 会因与身份相同而不重复显示。
+  const email = identity;
   return {
     id: vendor,
     provider: vendor,
     source: credential.source === "plugin" ? "plugin" : credential.source === "settings" ? "settings" : "cli",
-    label: name,
+    label: identity ? `${name} · ${identity}` : name,
+    identity,
+    email,
     plan: credential.plan ?? null,
     status: windows.length ? "ok" : "empty",
     windows,
@@ -750,12 +823,15 @@ async function collectOpenAiCodex(settings, _vendor, provided) {
         continue;
       }
       const windows = openAiWindows(response.data ?? {});
-      const plan = response.data?.plan_type ?? response.data?.planType ?? null;
+      const who = openAiProfile(credential.token);
+      const identity = who.name ?? credential.email ?? who.email;
       return {
         id: vendor,
         provider: vendor,
         source: credential.source === "plugin" ? "plugin" : credential.source === "settings" ? "settings" : "cli",
-        label: name,
+        label: identity ? `${name} · ${identity}` : name,
+        identity,
+        email: who.email ?? credential.email ?? null,
         plan: typeof plan === "string" ? plan : null,
         status: windows.length ? "ok" : "empty",
         windows,
@@ -789,6 +865,7 @@ async function collectCopilot(settings, _vendor, provided) {
     provider: vendor,
     source: credential.source === "plugin" ? "plugin" : credential.source === "settings" ? "settings" : "cli",
     label: typeof response.data?.login === "string" ? `${name} · ${response.data.login}` : name,
+    identity: typeof response.data?.login === "string" ? response.data.login : null,
     plan: typeof plan === "string" ? plan : null,
     status: windows.length ? "ok" : "empty",
     windows,
@@ -1014,8 +1091,9 @@ async function buildSnapshot({ force = false } = {}) {
           if (!credential) throw Object.assign(new Error("账号已删除，请刷新"), { code: "AUTH_CHANGED" });
           row = await vendor.collect(settings, vendor, credential);
         } catch (error) { row = errorAccount(vendor, error); }
-        return { ...row, id: `plugin:${account.id}`, source: "plugin", accountLabel: account.label,
-          label: `${vendor.name} · ${account.label}`, priority: account.priority };
+        const display = pluginAccountDisplay(vendor, row?.identity, row?.email);
+        return { ...row, id: `plugin:${account.id}`, source: "plugin", priority: account.priority,
+          identity: display.identity, email: display.email, vendorName: display.vendorName, label: display.label };
       }));
       const oauthVendor = ["anthropic", "openai-codex", "github-copilot"].includes(vendor.id);
       if (authError && oauthVendor) rows.push({ ...errorAccount(vendor, authError), id: `auth:${vendor.id}` });
@@ -1060,7 +1138,6 @@ const CHANNELS = {
   "quota.auth.submit": (payload) => getAuth().submit(payload.id, payload.input),
   "quota.auth.cancel": (payload) => getAuth().cancel(payload.id),
   "quota.auth.logout": (payload) => getAuth().logout(payload.accountId),
-  "quota.auth.rename": (payload) => getAuth().rename(payload.accountId, payload.label),
   "quota.auth.move": (payload) => getAuth().move(payload.accountId, payload.direction),
   "quota.snapshot": (payload) => buildSnapshot({ force: payload?.force === true }),
   "quota.refresh": () => buildSnapshot({ force: true }),

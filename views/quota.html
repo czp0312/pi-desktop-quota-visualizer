@@ -315,6 +315,10 @@
         background: color-mix(in oklab, var(--q-good) 16%, transparent);
       }
 
+      .qp-chip-mail {
+        text-transform: none;
+
+      }
       /* ── 额度窗口 ────────────────────────────────────────────────────── */
 
       .qp-windows {
@@ -516,9 +520,6 @@
       .qa-editor, .qa-confirm { flex-basis: 100%; min-width: 0; }
       .qa-editor label, .qa-add label { margin-top: 4px; }
       .qa-add { margin-bottom: 10px; }
-      .qp-rename { padding: 0 14px 12px; }
-      .qp-rename .qa-input { box-sizing: border-box; margin-top: 6px; }
-      .qp-rename-message { margin-left: 8px; font-size: 12px; color: var(--q-secondary); }
       @media (max-width: 440px) {
         .qp-head { flex-wrap: wrap; }
         .qp-head-actions { flex-wrap: wrap; }
@@ -577,7 +578,6 @@
       <div id="foot" class="qp-foot"></div>
     </main>
 
-    <script src="notes.js"></script>
     <script>
       (function () {
         "use strict";
@@ -706,7 +706,7 @@
             loading: "正在读取插件授权状态…", unknown: "授权状态未知", ready: "可选择账号独立授权；同一时间只能进行一个登录。",
             connected: "插件已授权", disconnected: "插件未授权", add: "添加账号", again: "重新授权", logout: "删除本插件授权",
             addHelp: "每个服务最多 10 个插件账号。新增授权时必须在浏览器切换到目标账号：当前浏览器会话可能仍是旧账号。重复授权不会带来新额度，请勿将重复授权当成新额度。仅插件 OAuth 账号可排序，不修改宿主。",
-            label: "账号备注（可选）", rename: "保存备注", up: "上移", down: "下移",
+            up: "上移", down: "下移",
             count: (n) => `${n} / 10 个账号`, confirm: "确认删除", keep: "取消删除",
             deleteConfirm: (name) => `删除「${name}」的本插件授权？仅清除此插件凭据，不影响宿主、CLI 或手动令牌。`,
             open: "重新打开登录浏览器", cancel: "取消登录", submit: "提交回调 URL",
@@ -726,7 +726,7 @@
             loading: "Reading plugin authorization status…", unknown: "Authorization status unknown", ready: "Choose an account to authorize independently. Only one sign-in can run at a time.",
             connected: "Plugin authorized", disconnected: "Plugin not authorized", add: "Add account", again: "Authorize again", logout: "Delete plugin authorization",
             addHelp: "Up to 10 plugin accounts per vendor. When adding, you must switch to the target account in the browser: the current session may still use the old account. Repeated authorization does not create new quota; do not count it as extra quota. Only plugin OAuth accounts can be ranked; the host is unchanged.",
-            label: "Account note (optional)", rename: "Save note", up: "Move up", down: "Move down",
+            up: "Move up", down: "Move down",
             count: (n) => `${n} / 10 accounts`, confirm: "Confirm deletion", keep: "Cancel deletion",
             deleteConfirm: (name) => `Delete plugin authorization for “${name}”? Only this plugin's credentials are removed; host, CLI and manual tokens are unaffected.`,
             open: "Reopen sign-in browser", cancel: "Cancel sign-in", submit: "Submit callback URL",
@@ -795,17 +795,12 @@
           const heading = document.createElement("h3");
           const add = document.createElement("div");
           add.className = "qa-add qa-row";
-          const input = document.createElement("input");
-          input.className = "qa-input";
-          input.type = "text";
-          input.maxLength = 80;
-          input.dataset.vendorLabel = vendor;
           const button = makeButton("start", authCopy().add);
           button.dataset.vendor = vendor;
-          add.append(input, button);
+          add.append(button);
           group.append(heading, add);
           el("auth-accounts").append(group);
-          const view = { group, heading, input, addButton: button, rows: new Map() };
+          const view = { group, heading, addButton: button, rows: new Map() };
           authGroups.set(vendor, view);
           return view;
         }
@@ -816,7 +811,6 @@
             const group = ensureAuthGroup(vendor, name);
             const list = accounts.filter((account) => account.vendor === vendor);
             group.heading.textContent = `${name} · ${c.count(list.length)}`;
-            group.input.placeholder = c.label;
             group.addButton.textContent = c.add;
             group.addButton.disabled = blocked || authBusy || !authData || pending || list.length >= 10;
             const ids = new Set(list.map((account) => account.id));
@@ -836,13 +830,15 @@
                 view = { row, name: nameNode, status, buttons: { start, up, down, delete: del, logout: yes, keep: no }, confirm };
                 group.rows.set(account.id, view); authRows.set(account.id, view);
               }
-              view.name.textContent = `${t().priority(account.priority)} · ${account.label}`;
+              const card = snapshot?.accounts?.find((r) => r.id === `plugin:${account.id}`);
+              const display = card ? card.label : account.label;
+              view.name.textContent = `${t().priority(account.priority)} · ${display}`;
               view.status.textContent = account.connected ? c.connected : c.disconnected;
               view.buttons.start.textContent = c.again; view.buttons.up.textContent = c.up; view.buttons.down.textContent = c.down; view.buttons.delete.textContent = c.logout;
               view.buttons.up.disabled = blocked || authBusy || pending || account.priority <= 1; view.buttons.down.disabled = blocked || authBusy || pending || account.priority >= list.length;
               view.buttons.start.disabled = blocked || authBusy || pending; view.buttons.delete.disabled = blocked || authBusy || pending;
               view.buttons.logout.textContent = c.confirm; view.buttons.keep.textContent = c.keep;
-              view.confirm.firstChild.textContent = c.deleteConfirm(account.label);
+              view.confirm.firstChild.textContent = c.deleteConfirm(display);
               view.buttons.logout.disabled = blocked || authBusy || pending;
               view.row.style.order = String(account.priority);
             }
@@ -917,8 +913,6 @@
             authError = "";
             authData = { accounts: Array.isArray(result.accounts) ? result.accounts : [], login: result.login || null };
             if (action === "start" && !payload.accountId && result.login?.status === "waiting") {
-              const group = authGroups.get(payload.vendor);
-              if (group) group.input.value = "";
               el("auth-login").scrollIntoView?.({ block: "nearest" });
             }
             if (action === "submit") el("auth-input").value = "";
@@ -927,7 +921,7 @@
               authRefreshed.add(login.id);
               authRefreshNeeded = true;
             }
-            if (["rename", "move", "logout"].includes(action)) authRefreshNeeded = true;
+            if (["move", "logout"].includes(action)) authRefreshNeeded = true;
           } catch {
             // Do not log bridge failures: callback URLs may contain authorization codes.
             authReady = true;
@@ -974,7 +968,7 @@
           if (!row && action === "start") {
             const group = authGroups.get(button.dataset.vendor);
             if (!group) return;
-            void authRequest("start", { vendor: button.dataset.vendor, label: group.input.value.trim() || undefined });
+            void authRequest("start", { vendor: button.dataset.vendor });
             return;
           }
           if (!row) return;
@@ -1140,16 +1134,6 @@
             </div>`;
         }
 
-        const notes = window.createQuotaNotes({
-          invoke: bridgeInvoke, getSnapshot: () => snapshot, isBlocked: authBlocked,
-          isEnglish: () => locale === "en", onSaved: () => {
-            for (const a of authData?.accounts || []) {
-              const card = snapshot?.accounts?.find((r) => r.id === `plugin:${a.id}`);
-              if (card) a.label = card.accountLabel;
-            }
-            render();
-          },
-        });
         function renderAccount(account) {
           const c = t();
           const windows = Array.isArray(account.windows) ? account.windows : [];
@@ -1167,6 +1151,8 @@
           if (account.plan) chips.push(`<span class="qp-chip">${escapeHtml(account.plan)}</span>`);
           if (account.demo) chips.push(`<span class="qp-chip">demo</span>`);
           if (account.manual) chips.push(`<span class="qp-chip">manual</span>`);
+          // 昵称在标题里，邮箱放 chip；两者相同时（如 Claude 只有邮箱）不重复显示。
+          if (account.email && account.email !== account.identity) chips.push(`<span class="qp-chip qp-chip-mail">${escapeHtml(account.email)}</span>`);
           if (windows.length) {
             chips.push(
               `<span class="qp-chip qp-chip-${sev}">${escapeHtml(
@@ -1214,7 +1200,6 @@
                 <span class="${dotClass}" aria-hidden="true"></span>
               </div>
               ${body}
-              ${notes.markup(account)}
             </article>`;
         }
 
@@ -1239,10 +1224,6 @@
         }
 
         function render() {
-          notes.sync();
-          const focused = document.activeElement;
-          const noteFocus = focused?.dataset?.noteInput;
-          const selection = noteFocus ? [focused.selectionStart, focused.selectionEnd] : null;
           const c = t();
           el("title").textContent = c.title;
           el("subtitle").textContent = c.subtitle;
@@ -1267,10 +1248,6 @@
               </div>`;
           } else {
             list.innerHTML = accounts.map(renderAccount).join("");
-          }
-          if (noteFocus) {
-            const input = [...list.querySelectorAll("[data-note-input]")].find((n) => n.dataset.noteInput === noteFocus);
-            if (input && !input.disabled) { input.focus({ preventScroll: true }); input.setSelectionRange(...selection); }
           }
 
           const foot = el("foot");

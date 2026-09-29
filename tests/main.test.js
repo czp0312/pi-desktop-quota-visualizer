@@ -21,7 +21,6 @@ function app(settings = {}, pluginCredentials = {}, fetcher) {
     credential: async (id) => records.find((r) => r.id === id)?.credential ?? null,
     status: async () => ({ ok: true, accounts: metadata(), login: null }),
     logout: async (id) => { records = records.filter((r) => r.id !== id); changed(); return auth.status(); },
-    rename: async (id, label) => { records.find((r) => r.id === id).label = label; changed(); return auth.status(); },
     move: async (id, direction) => {
       const i = records.findIndex((r) => r.id === id), j = i + (direction === "up" ? -1 : 1);
       [records[i], records[j]] = [records[j], records[i]]; changed(); return auth.status();
@@ -31,7 +30,7 @@ function app(settings = {}, pluginCredentials = {}, fetcher) {
   };
   const pi = { plugin: { getSettings: async () => settings, setSettings: async (partial) => Object.assign(settings, partial) },
     commands: { unregister: async () => {} }, net: { fetch: async (input) => { requests.push(input); return fetcher(input); } } };
-  const sandbox = { pi, module: { exports: {} }, console,
+  const sandbox = { pi, module: { exports: {} }, console, Buffer,
     require(name) {
       if (name === "./lib/oauth") return { createAuth: (_pi, opts) => { changed = opts.onChange; return auth; } };
       if (name === "node:fs/promises") return { stat: async () => { cliReads++; throw new Error("no CLI installed"); } };
@@ -134,15 +133,88 @@ test("multiple ChatGPT accounts keep headers isolated; exhausted/error accounts 
   assert.deepEqual(Array.from((await a.invoke("quota.snapshot", {})).accounts, (r) => r.id), ["plugin:b", "plugin:c"]);
 });
 
-test("priority changes and labels invalidate snapshot cache and change the recommendation", async () => {
+test("priority changes invalidate the snapshot cache and change the recommendation", async () => {
   const a = app({ autoDetect: false }, ["a", "b"].map((id) => ({ id, vendor: "anthropic", label: id,
     credential: { token: id, source: "plugin" } })), () => reply({ five_hour: { utilization: 10 } }));
   assert.equal((await a.invoke("quota.snapshot", {})).accounts.find((r) => r.recommended).id, "plugin:a");
   await a.invoke("quota.auth.move", { accountId: "b", direction: "up" });
-  await a.invoke("quota.auth.rename", { accountId: "b", label: "备用账号" });
   const snapshot = await a.invoke("quota.snapshot", {});
   assert.equal(snapshot.accounts[0].id, "plugin:b");
-  assert.equal(snapshot.accounts[0].accountLabel, "备用账号");
   assert.equal(snapshot.accounts[0].priority, 1);
   assert.equal(snapshot.accounts[0].recommended, true);
+});
+
+const fakeJwt = (claims) => `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
+
+test("ChatGPT plugin account prefers the profile name and still carries the email", async () => {
+  const token = fakeJwt({ "https://api.openai.com/profile": { name: "山口 愛", email: "alice@example.com" } });
+  const a = app({ autoDetect: false }, { "openai-codex": { token, accountId: "acct-1", source: "plugin" } },
+    () => reply({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18000 } } }));
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].label, "OpenAI (ChatGPT Plus/Pro) · 山口 愛");
+  assert.equal(result.accounts[0].identity, "山口 愛");
+  assert.equal(result.accounts[0].email, "alice@example.com");
+  assert.equal(result.accounts[0].vendorName, "OpenAI (ChatGPT Plus/Pro)");
+  assert.ok(!JSON.stringify(result).includes(token));
+});
+
+test("ChatGPT plugin account falls back to the email when the token has no name", async () => {
+  const token = fakeJwt({ "https://api.openai.com/profile": { email: "alice@example.com" } });
+  const a = app({ autoDetect: false }, { "openai-codex": { token, accountId: "acct-1", source: "plugin" } },
+    () => reply({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18000 } } }));
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].label, "OpenAI (ChatGPT Plus/Pro) · alice@example.com");
+  assert.equal(result.accounts[0].identity, "alice@example.com");
+});
+
+test("ChatGPT account without a readable email falls back to the vendor name, not the default number", async () => {
+  const a = app({ autoDetect: false }, { "openai-codex": { token: "opaque-token", source: "plugin" } },
+    () => reply({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18000 } } }));
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].label, "OpenAI (ChatGPT Plus/Pro)");
+  assert.equal(result.accounts[0].identity, null);
+});
+
+test("Copilot plugin account shows the detected GitHub login", async () => {
+  const a = app({ autoDetect: false }, { "github-copilot": { token: "gh", source: "plugin" } },
+    () => reply({ login: "octocat", copilot_plan: "individual" }));
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].label, "GitHub Copilot · octocat");
+  assert.equal(result.accounts[0].identity, "octocat");
+});
+
+test("Claude plugin account shows the email from the OAuth profile endpoint", async () => {
+  const a = app({ autoDetect: false }, { anthropic: { token: "claude-token", source: "plugin" } }, (req) =>
+    req.url.includes("/api/oauth/profile")
+      ? reply({ account: { uuid: "u1", email: "claude@example.com" } })
+      : reply({ five_hour: { utilization: 10 } }));
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].label, "Anthropic (Claude Pro/Max) · claude@example.com");
+  assert.equal(result.accounts[0].identity, "claude@example.com");
+  assert.ok(!JSON.stringify(result).includes("claude-token"));
+});
+
+test("a stored Claude email skips the profile request", async () => {
+  const a = app({ autoDetect: false }, { anthropic: { token: "t", email: "stored@example.com", source: "plugin" } }, (req) => {
+    assert.ok(!req.url.includes("/api/oauth/profile"), "profile must not be fetched when the email is already known");
+    return reply({ five_hour: { utilization: 10 } });
+  });
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].identity, "stored@example.com");
+});
+
+test("a failing Claude profile request only loses the name, not the quota", async () => {
+  const a = app({ autoDetect: false }, { anthropic: { token: "t", source: "plugin" } }, (req) =>
+    req.url.includes("/api/oauth/profile") ? reply({ error: "nope" }, 500) : reply({ five_hour: { utilization: 10 } }));
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].status, "ok");
+  assert.equal(result.accounts[0].label, "Anthropic (Claude Pro/Max)");
+  assert.equal(result.accounts[0].identity, null);
+});
+
+test("a stored ChatGPT email wins over the access token claims", async () => {
+  const a = app({ autoDetect: false }, { "openai-codex": { token: "opaque", email: "id@example.com", source: "plugin" } },
+    () => reply({ plan_type: "plus", rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18000 } } }));
+  const result = await a.invoke("quota.refresh", {});
+  assert.equal(result.accounts[0].identity, "id@example.com");
 });

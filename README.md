@@ -19,6 +19,7 @@
 - **只显示已登录的**：拿不到凭据的服务商不会出现在列表里，不占位、不报错。
 - **跟随应用外观**：深浅色、语言与 PI-Desktop 设计令牌一致。
 - **无需安装 CLI**：ChatGPT / Claude / Copilot 可在面板「管理账号」中独立授权；已有 CLI 登录仍可自动发现。
+- **账号名自动识别**：插件账号直接显示检测到的身份——ChatGPT 用昵称（profile claim 的 `name`）、邮箱作为卡片 chip；Claude 用邮箱；GitHub Copilot 用登录名。无需手填备注，也不提供改名。
 
 ## 支持的服务商
 
@@ -68,7 +69,7 @@
    [plugins.aiuo.net/plugins/io.github.czp0312.subscription-quota](https://plugins.aiuo.net/plugins/io.github.czp0312.subscription-quota)。
 3. 安装时审阅权限并授权（`net.fetch` 属高风险权限）。
 
-插件 id 是 `io.github.czp0312.subscription-quota`。源码当前版本为 `0.4.1`；市场版本以市场实际发布记录为准。
+插件 id 是 `io.github.czp0312.subscription-quota`。源码当前版本为 `0.4.2`；市场版本以市场实际发布记录为准。
 
 **方式二 · 安装插件包**
 
@@ -102,7 +103,7 @@
 `usage.listTurns` 仅是本地对话统计，不是订阅剩余额度。本插件不读取或解密宿主密钥库，也无需修改宿主。
 浏览器若已有登录会话，通常不必再输入密码，但仍需确认授权。
 
-- 备注可直接在额度卡片中点击「修改备注」编辑并保存；保存不会重新请求额度，失败可立即重试。
+- 账号名自动显示检测到的身份：ChatGPT 用 profile claim 的 `name`（昵称）作标题、`email` 显示为卡片上的 chip；Claude 调用同源的 `/api/oauth/profile` 读取 account.email（无昵称，故只用邮箱）；GitHub Copilot 用额度接口返回的登录名。都拿不到时只显示厂商名——插件不提供手填备注，也不能改名。
   - 每个支持 OAuth 的服务商最多保存 **10 个插件账号**，一次只能进行一个登录流程。
 - 插件 OAuth 账号逐个显示额度；手工令牌独立显示，不再覆盖插件账号。
   仅当该厂商既没有插件账号也没有手工令牌时，才使用开启的 CLI 自动发现回退。
@@ -115,10 +116,10 @@
 
 ### 多账号与优先级
 
-1. 在「管理账号」选择服务商，填写便于区分的备注，点击 **添加账号**。
+1. 在「管理账号」选择服务商，点击 **添加账号**（账号名会自动显示检测到的用户名/邮箱）。
 2. 在浏览器中切换到目标账号再确认授权；已有浏览器登录会话可能仍是上一个账号。
    插件不会把无法可靠识别的账号自动合并，**重复授权同一账号不代表获得额外额度**，请自行删除重复项。
-3. 每个账号可改名、重新授权或删除。**添加账号**新增记录；**重新授权**仅更新所选记录，其他账号不变。
+3. 每个账号可重新授权或删除。**添加账号**新增记录；**重新授权**仅更新所选记录，其他账号不变。
 4. 使用 **上移 / 下移** 调整同一服务商内的优先级（数字越小越优先），顺序会持久保存。
 5. 插件分别查询各账号额度，并标出当前优先级最高的可推荐账号。
 
@@ -198,10 +199,17 @@ CLI 回退只读取上表的明确路径，不遍历目录。关闭「自动发�
 自定义来源同样受这份白名单约束 —— 填非白名单地址会被宿主拒绝。
 
 - OAuth 令牌不写日志、不进入额度快照、不返回界面；授权 state/链接及设备用户码仅用于登录 UI。
-- OAuth 凭据由 Node fs 写入 `pi.plugin.getDataPath()` 返回的**本插件数据目录**：
-  `quota-oauth.enc`（AES-256-GCM 密文）、`quota-oauth.key`（本地随机密钥）。原子替换文件；POSIX 新文件权限为 `0600`。
-  **密钥与密文同目录，安全依赖操作系统文件权限，不是系统钥匙串，也不能抵御同用户权限的恶意程序。**
-  Windows 使用数据目录继承的 ACL。请勿分享/提交这两个文件；原有手工令牌设置仍是普通插件设置，不属于此密文存储。
+- OAuth 凭据由 Node fs 写入 `pi.plugin.getDataPath()` 返回的**本插件数据目录**
+  （Windows 实测为 `%USERPROFILE%\.pi-desktop\plugins\data\io.github.czp0312.subscription-quota\`）：
+  `quota-oauth.enc`（AES-256-GCM 密文，格式 `[1B 版本=1][12B IV][16B tag][密文]`）、
+  `quota-oauth.key`（32 字节本地随机密钥）。原子替换文件；POSIX 新文件权限为 `0600`。
+  密文内容是 `{ version, accounts: [{ id, vendor, label, credential: { access, refresh, expires, accountId?, email? } }] }`
+  —— **含长期有效的 refresh token**，等价于这些账号的长期凭据。
+- **密钥与密文同目录，安全依赖操作系统文件权限，不是系统钥匙串，也不能抵御同用户权限的恶意程序。**
+  Windows 上 POSIX `0600` 不生效，实际依赖数据目录继承的 ACL。请勿分享/提交这两个文件。
+- 手工令牌（设置里的 `credentials`）由宿主按普通插件设置保存为该插件数据目录下的 `settings.json`，
+  不属于上面的密文存储；CLI 凭据只读原文件、不复制。
+- 删除插件账号只清本地密文里的那一条记录，**不会撤销服务商侧的授权**；要撤销请到服务商账号安全页。
 - 授权期间 Node HTTP 只监听 `127.0.0.1:1455`（ChatGPT）或 `127.0.0.1:53692`（Claude），
   校验回调路径、随机 state 与 PKCE；完成、取消、超时或卸载后关闭。最长 10 分钟。
 - 插件不读取 PI-Desktop 的密钥库，也不碰 `~/.ssh`、`.env*`、`*.pem` 等无关凭据路径。
@@ -225,7 +233,7 @@ pnpm install
 pnpm --filter @pi-desktop/plugin-devkit... build
 pnpm pi-plugin check <本仓库路径>
 pnpm pi-plugin pack  <本仓库路径>
-# → dist/io.github.czp0312.subscription-quota-0.4.1.piplug
+# → dist/io.github.czp0312.subscription-quota-0.4.2.piplug
 ```
 
 生成的 `.piplug` 是 store-only ZIP，请勿用普通 `zip` 重打（安装器只接受未压缩归档）。
