@@ -9,6 +9,8 @@
   "homepage": "https://github.com/czp0312/pi-desktop-quota-visualizer#readme",
   "license": "MIT",
   "categories": ["productivity"],
+  "changelog": "Release 0.2.0：支持八家订阅服务商（Anthropic / OpenAI / GitHub Copilot / OpenRouter 内置适配器，Kimi Code / Meta / Radius / xAI 走自定义来源），只显示本机已登录的账号；进度条改为绿色填充 = 剩余额度、灰色底槽 = 已用额度；修正 OpenAI 额度字段解析与重置倒计时。",
+  "safetyNotes": "只显示插件真正拿到凭据的账号。凭据来源两类：① 你在本插件私有设置里填写的令牌；② 本机已登录的 CLI / 编辑器留下的凭据文件（~/.claude/.credentials.json、~/.codex/auth.json、github-copilot 的 hosts.json / apps.json），由插件进程内的 Node fs 读取。插件刻意不读取 PI-Desktop 自己的加密密钥库。令牌不写日志、不进缓存、不返回给界面；返回的只有额度数字。联网仅限 net.domains 里声明的八个服务商域名。",
   "i18n": {
     "en": {
       "name": "Subscription Quotas",
