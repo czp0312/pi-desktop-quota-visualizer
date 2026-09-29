@@ -14,15 +14,11 @@
  * 每个服务商的 collect() 返回 null 就表示「本机找不到这个账号的可用凭据 = 没登录」，
  * 这类账号不会出现在界面上；只有真正拿到凭据的账号才会渲染。
  *
- * ── 一个必须知道的边界 ──────────────────────────────────────────────────────
- * PI-Desktop 自己的「用订阅登录」把 OAuth 凭据加密存在宿主的密钥库里
- * （host-core SecretStore：<dataDir>/secrets/<sha256(ref)>.bin，AES-256-GCM，
- * 机器密钥在 <dataDir>/secrets/.machine-key），插件 API 刻意不暴露它，仓库里也没有
- * 任何额度/用量接口。插件进程虽然能用原生 Node，但去读机器密钥再解密密钥库等于
- * 绕过宿主刻意建立的凭据隔离，本插件不这样做。
- * 因此可用的凭据来源只有两类，按优先级：
- *   ① 用户在本插件设置里填写的令牌（credentials / sources）；
- *   ② 本机已登录的 CLI / 编辑器留下的凭据文件（例如 Claude Code、Codex、Copilot）。
+ * ── 凭据来源 ────────────────────────────────────────────────────────────────
+ * 手工令牌 → 本插件独立 OAuth 授权 → 可关闭的 CLI / 编辑器凭据回退。
+ * 宿主没有供插件复用订阅登录的 API；不读取或解密宿主 SecretStore。
+ * ChatGPT / Claude / Copilot 可在面板「管理账号」单独授权，无需安装 CLI。
+ * 插件凭据仅保存在自己的数据目录中，界面仅接收非敏感登录状态。
  *
  * ── 服务商注册表 ────────────────────────────────────────────────────────────
  * id 与 PI-Desktop 的厂商 id 对齐：anthropic / openai-codex / github-copilot /
@@ -33,15 +29,16 @@
  *
  * ── 通道 ────────────────────────────────────────────────────────────────────
  * 视图 window.pluginBridge.invoke("quota.*") → onPanelInvoke。
- * 宿主对自定义通道的转发超时是 30s，所以每个上游请求单独限时 12s。
+ * 宿主对自定义通道的转发超时是 30s；刷新令牌 + 两个额度端点各限时 8s。
  */
 
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { createAuth } = require("./lib/oauth");
 
 /** 上游请求超时；宿主面板通道整体约 30s，留足余量。 */
-const REQUEST_TIMEOUT_MS = 12_000;
+const REQUEST_TIMEOUT_MS = 8_000;
 /** 快照缓存时间，避免面板轮询时反复打上游。 */
 const CACHE_TTL_MS = 60_000;
 /** 读凭据文件的体积上限，防御性保护。 */
@@ -51,6 +48,28 @@ const MAX_REFRESH_SECONDS = 3600;
 
 /** 缓存：只存额度快照，不存凭据。 */
 let cache = null; // { at: number, snapshot: object }
+let cacheEpoch = 0;
+let auth;
+function invalidateCache() { cache = null; cacheEpoch += 1; }
+function getAuth() {
+  if (!auth) auth = createAuth({
+    plugin: { getDataPath: () => pi.plugin.getDataPath() },
+    net: { fetch: (input) => pi.net.fetch(input) },
+    shell: { openExternal: (url) => pi.shell.openExternal(url) },
+  }, { onChange: invalidateCache });
+  return auth;
+}
+
+async function resolveCredential(settings, vendor, cli) {
+  const supplied = settingsToken(settings, vendor);
+  if (supplied) {
+    const entry = settings.credentials?.[vendor];
+    const accountId = typeof entry?.accountId === "string" ? entry.accountId : null;
+    return { token: supplied, accountId, source: "settings" };
+  }
+  const saved = await getAuth().credential(vendor);
+  return saved ?? (settings.autoDetect ? await cli() : null);
+}
 
 // ── 设置 ────────────────────────────────────────────────────────────────────
 
@@ -158,7 +177,12 @@ async function httpJson(url, headers) {
     error.code = "UNSUPPORTED";
     throw error;
   }
-  const response = await pi.net.fetch({ url, method: "GET", headers, timeoutMs: REQUEST_TIMEOUT_MS });
+  let response;
+  try {
+    response = await pi.net.fetch({ url, method: "GET", headers, timeoutMs: REQUEST_TIMEOUT_MS });
+  } catch {
+    throw Object.assign(new Error("额度网络请求失败，请检查网络及插件权限后重试"), { code: "NETWORK" });
+  }
   let data = null;
   try {
     data = JSON.parse(response.bodyText);
@@ -173,8 +197,8 @@ function friendlyHttpError(label, status, bodyText) {
   if (status === 404) return `${label}: 额度接口不存在（HTTP 404）`;
   if (status === 429) return `${label}: 请求过于频繁（HTTP 429），稍后重试`;
   if (status >= 500) return `${label}: 服务端错误（HTTP ${status}）`;
-  const snippet = typeof bodyText === "string" ? bodyText.slice(0, 160).replace(/\s+/g, " ") : "";
-  return `${label}: 请求失败（HTTP ${status}）${snippet ? ` · ${snippet}` : ""}`;
+  // Never surface upstream bodies: they may echo an Authorization header.
+  return `${label}: 请求失败（HTTP ${status}）`;
 }
 
 function errorMessage(error) {
@@ -515,7 +539,6 @@ function mappedWindows(data, specs) {
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
       const minutes = minutesFrom(item, spec.minutesField);
-        num(item[spec.minutesField ?? "window_minutes"]) ?? (seconds !== null ? seconds / 60 : null);
       const period =
         (typeof spec.period === "string" && PERIOD_LABEL_KEY[spec.period] ? spec.period : null) ??
         (minutes !== null ? periodFromMinutes(minutes) : "other");
@@ -678,10 +701,7 @@ async function copilotCliCredentials() {
 async function collectAnthropic(settings) {
   const vendor = "anthropic";
   const name = "Anthropic (Claude Pro/Max)";
-  const supplied = settingsToken(settings, vendor);
-  const credential = supplied
-    ? { token: supplied, plan: null, expired: false, source: "settings" }
-    : await claudeCliCredentials();
+  const credential = await resolveCredential(settings, vendor, claudeCliCredentials);
   if (!credential) return null;
   const response = await httpJson("https://api.anthropic.com/api/oauth/usage", {
     accept: "application/json",
@@ -695,7 +715,7 @@ async function collectAnthropic(settings) {
     id: vendor,
     provider: vendor,
     label: name,
-    plan: credential.plan,
+    plan: credential.plan ?? null,
     status: windows.length ? "ok" : "empty",
     windows,
     note: credential.expired ? "本机凭据显示已过期，若数值异常请重新登录" : null,
@@ -706,8 +726,7 @@ async function collectAnthropic(settings) {
 async function collectOpenAiCodex(settings) {
   const vendor = "openai-codex";
   const name = "OpenAI (ChatGPT Plus/Pro)";
-  const supplied = settingsToken(settings, vendor);
-  const credential = supplied ? { token: supplied, accountId: null } : await codexCliCredentials();
+  const credential = await resolveCredential(settings, vendor, codexCliCredentials);
   if (!credential) return null;
 
   const headers = {
@@ -725,6 +744,7 @@ async function collectOpenAiCodex(settings) {
     try {
       const response = await httpJson(url, headers);
       if (response.status < 200 || response.status >= 300) {
+        if (response.status !== 404) throw httpError(name, response);
         if (!firstError) firstError = httpError(name, response);
         continue;
       }
@@ -740,7 +760,7 @@ async function collectOpenAiCodex(settings) {
         hint: windows.length ? null : "该账号未返回任何额度窗口",
       };
     } catch (error) {
-      if (!firstError) firstError = error;
+      throw error;
     }
   }
   throw firstError ?? Object.assign(new Error(`${name}: 额度接口不可达`), { code: "NETWORK" });
@@ -749,8 +769,7 @@ async function collectOpenAiCodex(settings) {
 async function collectCopilot(settings) {
   const vendor = "github-copilot";
   const name = "GitHub Copilot";
-  const supplied = settingsToken(settings, vendor);
-  const credential = supplied ? { token: supplied, user: null } : await copilotCliCredentials();
+  const credential = await resolveCredential(settings, vendor, copilotCliCredentials);
   if (!credential) return null;
   const response = await httpJson("https://api.github.com/copilot_internal/user", {
     accept: "application/json",
@@ -973,24 +992,22 @@ async function buildSnapshot({ force = false } = {}) {
     return { ...cache.snapshot, cached: true };
   }
 
+  const snapshotEpoch = cacheEpoch;
   const settings = await getSettings();
   const accounts = [];
 
   if (settings.demoMode) {
     for (const account of demoSample()) accounts.push(account);
   } else {
-    if (settings.autoDetect) {
-      for (const vendor of VENDORS) {
-        try {
-          // null = 本机没有这个账号的可用凭据（未登录）→ 不显示。
-          const account = await vendor.collect(settings, vendor);
-          if (account) accounts.push(account);
-        } catch (error) {
-          // 拿到凭据但取数失败 → 显示出来，区分「失败」与「未登录」。
-          accounts.push(errorAccount(vendor, error));
-        }
+    const collected = await Promise.all(VENDORS.map(async (vendor) => {
+      try {
+        // autoDetect controls only CLI files, not explicit/plugin credentials.
+        return await vendor.collect(settings, vendor);
+      } catch (error) {
+        return errorAccount(vendor, error);
       }
-    }
+    }));
+    accounts.push(...collected.filter(Boolean));
     for (const account of manualAccounts(settings.accounts)) accounts.push(account);
   }
 
@@ -1002,6 +1019,10 @@ async function buildSnapshot({ force = false } = {}) {
     refreshSeconds: settings.refreshSeconds,
     accounts,
   };
+  if (snapshotEpoch !== cacheEpoch) {
+    // Refresh/login/logout occurred while fetching: never cache another epoch.
+    throw Object.assign(new Error("账号授权已更新，请刷新额度"), { code: "AUTH_CHANGED" });
+  }
   cache = { at: now, snapshot };
   return snapshot;
 }
@@ -1009,16 +1030,29 @@ async function buildSnapshot({ force = false } = {}) {
 // ── 通道路由 ────────────────────────────────────────────────────────────────
 
 const CHANNELS = {
+  "quota.auth.status": () => getAuth().status(),
+  "quota.auth.start": async (payload) => {
+    if ((await getSettings()).demoMode) return { ok: false, code: "DEMO_MODE", message: "请先关闭演示模式再登录" };
+    return getAuth().start(payload.vendor);
+  },
+  "quota.auth.open": (payload) => getAuth().open(payload.id),
+  "quota.auth.submit": (payload) => getAuth().submit(payload.id, payload.input),
+  "quota.auth.cancel": (payload) => getAuth().cancel(payload.id),
+  "quota.auth.logout": (payload) => getAuth().logout(payload.vendor),
   "quota.snapshot": (payload) => buildSnapshot({ force: payload?.force === true }),
   "quota.refresh": () => buildSnapshot({ force: true }),
   "quota.setDemo": async (payload) => {
     const enabled = payload?.enabled === true;
+    if (enabled && auth) {
+      const current = await auth.status();
+      if (current.login) await auth.cancel(current.login.id);
+    }
     try {
       await pi.plugin.setSettings({ demoMode: enabled });
     } catch {
       /* 设置写入失败不阻塞渲染 */
     }
-    cache = null;
+    invalidateCache();
     return buildSnapshot({ force: true });
   },
 };
@@ -1053,7 +1087,9 @@ async function onLoad() {
 }
 
 async function onUnload() {
-  cache = null;
+  invalidateCache();
+  if (auth) await auth.stop();
+  auth = null;
   try {
     await pi.commands.unregister("quota.open");
   } catch {

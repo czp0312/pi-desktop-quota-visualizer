@@ -2,25 +2,25 @@
   "schemaVersion": 1,
   "id": "io.github.czp0312.subscription-quota",
   "name": "订阅额度",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
   "author": "czp0312",
   "repository": "https://github.com/czp0312/pi-desktop-quota-visualizer",
   "homepage": "https://github.com/czp0312/pi-desktop-quota-visualizer#readme",
   "license": "MIT",
   "categories": ["productivity"],
-  "changelog": "Release 0.2.0：支持八家订阅服务商（Anthropic / OpenAI / GitHub Copilot / OpenRouter 内置适配器，Kimi Code / Meta / Radius / xAI 走自定义来源），只显示本机已登录的账号；进度条改为绿色填充 = 剩余额度、灰色底槽 = 已用额度；修正 OpenAI 额度字段解析与重置倒计时。",
-  "safetyNotes": "只显示插件真正拿到凭据的账号。凭据来源两类：① 你在本插件私有设置里填写的令牌；② 本机已登录的 CLI / 编辑器留下的凭据文件（~/.claude/.credentials.json、~/.codex/auth.json、github-copilot 的 hosts.json / apps.json），由插件进程内的 Node fs 读取。插件刻意不读取 PI-Desktop 自己的加密密钥库。令牌不写日志、不进缓存、不返回给界面；返回的只有额度数字。联网仅限 net.domains 里声明的八个服务商域名。",
+  "changelog": "Release 0.3.0：新增 ChatGPT / Claude / GitHub Copilot 插件内独立 OAuth 登录、令牌刷新与退出，无需安装 CLI；不读取宿主密钥库。修正自动发现开关，关闭后仍可查询插件授权与手工令牌账号。",
+  "safetyNotes": "凭据优先级：手工令牌、本插件独立 OAuth、可关闭的 CLI 凭据回退。不复用或读取 PI-Desktop 密钥库。OAuth 令牌由 Node fs 加密保存到本插件 getDataPath 目录（quota-oauth.enc）；本地密钥 quota-oauth.key 同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间 Node HTTP 仅监听 127.0.0.1:1455/53692，超时或结束关闭。令牌不写日志、不返回界面；联网走 net.fetch 白名单，shell.openExternal 仅打开服务商授权页。退出只清本插件授权，不退出宿主/CLI，也不撤销服务商授权。",
   "i18n": {
     "en": {
       "name": "Subscription Quotas",
       "description": "Visualize the remaining quota of your subscription accounts in the work panel — Anthropic (Claude Pro/Max), OpenAI (ChatGPT Plus/Pro), GitHub Copilot, OpenRouter and more — as 5-hour / weekly / monthly / credit windows with remaining percentage, reset countdown and a progress bar (green = remaining, grey = used). Only accounts signed in on this machine are shown.",
-      "safetyNotes": "Only accounts the plugin can actually obtain a credential for are shown; everything else stays hidden. Two credential sources only: (1) a token you type into this plugin's own private settings, and (2) credential files an already-signed-in CLI/editor left on this machine, read with Node fs inside the plugin process — ~/.claude/.credentials.json (Claude Code), ~/.codex/auth.json (Codex CLI) and github-copilot hosts.json/apps.json. The plugin deliberately does NOT read PI-Desktop's own encrypted secret store, the AES-256-GCM secrets folder under the app data directory — its OAuth credentials are isolated from plugins on purpose, so an account signed in only through PI-Desktop's Settings shows nothing here until you also supply a token. Tokens are never logged, never cached and never returned to the view; only quota figures are. Network access is limited to the eight vendor hosts declared in net.domains."
+      "safetyNotes": "Credential priority: manual token, this plugin's independent OAuth login, then optional CLI credentials. Never reads PI-Desktop's secret store. OAuth tokens are encrypted via Node fs in this plugin's getDataPath directory (quota-oauth.enc); the local key quota-oauth.key is stored alongside it, so protection relies on OS file permissions, not an OS keychain. During browser login Node HTTP listens only on 127.0.0.1:1455/53692 and closes on completion or timeout. Tokens are never logged or returned to the panel. Requests use net.fetch's allowlist; shell.openExternal opens vendor authorization pages. Logout removes only this plugin's credentials, not host/CLI logins or vendor grants."
     },
     "zh-CN": {
       "name": "订阅额度",
       "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
-      "safetyNotes": "只显示插件真正拿到凭据的账号，其余一律不显示。凭据只有两个来源：① 你在本插件私有设置里填写的令牌；② 本机已登录的 CLI / 编辑器留下的凭据文件，由插件进程内的 Node fs 读取——~/.claude/.credentials.json（Claude Code）、~/.codex/auth.json（Codex CLI）、github-copilot 的 hosts.json / apps.json。插件刻意不读取 PI-Desktop 自己的加密密钥库（应用数据目录下那个 AES-256-GCM 的 secrets 文件夹）：它的 OAuth 凭据是被有意隔离在插件之外的，所以只在 PI-Desktop 设置里登录过的账号，在没有另填令牌之前不会显示任何内容。令牌不写日志、不进缓存、不返回给界面；返回的只有额度数字。联网仅限 net.domains 里声明的八个服务商域名。"
+      "safetyNotes": "凭据优先级：手工令牌、本插件独立 OAuth、可关闭的 CLI 凭据回退。不读取 PI-Desktop 密钥库。OAuth 令牌在本插件数据目录加密保存，本地密钥同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间仅监听 127.0.0.1:1455/53692，结束或超时关闭。令牌不写日志、不返回界面；联网受域名白名单约束。退出只清插件授权，不影响宿主/CLI 或服务商授权。"
     }
   },
   "main": "main.js",
@@ -67,8 +67,8 @@
     "settings": [
       {
         "key": "autoDetect",
-        "title": "自动发现本机已登录的账号",
-        "description": "读取 Claude Code / Codex / Copilot 留下的凭据文件；找不到的账号不会显示。",
+        "title": "自动发现 CLI / 编辑器账号",
+        "description": "作为回退读取 Claude Code / Codex / Copilot 凭据文件。关闭后仍查询本插件授权和手工令牌账号。无需安装 CLI，可在面板的管理账号中单独登录。",
         "type": "boolean",
         "default": true
       },
@@ -109,9 +109,12 @@
       }
     ]
   },
-  "permissions": ["ui.view", "ui.panel", "net.fetch"],
+  "permissions": ["ui.view", "ui.panel", "net.fetch", "shell.openExternal"],
   "net": {
     "domains": [
+      "auth.openai.com",
+      "platform.claude.com",
+      "github.com",
       "api.anthropic.com",
       "chatgpt.com",
       "api.github.com",
