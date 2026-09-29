@@ -59,9 +59,19 @@
 
 ## 安装
 
-需要 PI-Desktop。二选一：
+需要 PI-Desktop。三种方式任选：
 
-**方式一 · 安装插件包**
+**方式一 · 插件市场（推荐）**
+
+1. PI-Desktop → **插件** → **市场**。
+2. 搜索「订阅额度」，或直接打开
+   [plugins.aiuo.net/plugins/io.github.czp0312.subscription-quota](https://plugins.aiuo.net/plugins/io.github.czp0312.subscription-quota)。
+3. 安装时审阅权限并授权（`net.fetch` 属高风险权限）。
+
+插件 id 是 `io.github.czp0312.subscription-quota`，市场条目与源码 tag `v0.2.0`
+一一对应（目录里记录 sha256，客户端安装前会校验）。
+
+**方式二 · 安装插件包**
 
 1. 打开 **插件**（扩展）页。
 2. 右上角溢出菜单 → **安装插件包**。
@@ -70,7 +80,7 @@
 
 插件包从本仓库的 [Releases](../../releases) 下载，或按下方「打包」一节自行构建。
 
-**方式二 · 加载开发插件**
+**方式三 · 加载开发插件**
 
 1. 插件页 → **加载开发插件**。
 2. 选择本仓库根目录（含 `manifest.json` 的那一层）。
