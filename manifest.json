@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "id": "local.subscription-quota",
+  "name": "订阅额度",
+  "version": "0.2.0",
+  "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
+  "author": "czp0312",
+  "repository": "https://github.com/czp0312/pi-desktop-quota-visualizer",
+  "homepage": "https://github.com/czp0312/pi-desktop-quota-visualizer#readme",
+  "license": "MIT",
+  "categories": ["productivity"],
+  "i18n": {
+    "en": {
+      "name": "Subscription Quotas",
+      "description": "Visualize the remaining quota of your subscription accounts in the work panel — Anthropic (Claude Pro/Max), OpenAI (ChatGPT Plus/Pro), GitHub Copilot, OpenRouter and more — as 5-hour / weekly / monthly / credit windows with remaining percentage, reset countdown and a progress bar (green = remaining, grey = used). Only accounts signed in on this machine are shown.",
+      "safetyNotes": "Only accounts the plugin can actually obtain a credential for are shown; everything else stays hidden. Two credential sources only: (1) a token you type into this plugin's own private settings, and (2) credential files an already-signed-in CLI/editor left on this machine, read with Node fs inside the plugin process — ~/.claude/.credentials.json (Claude Code), ~/.codex/auth.json (Codex CLI) and github-copilot hosts.json/apps.json. The plugin deliberately does NOT read PI-Desktop's own encrypted secret store (<dataDir>/secrets) — its OAuth credentials are isolated from plugins on purpose, so an account signed in only through PI-Desktop's Settings shows nothing here until you also supply a token. Tokens are never logged, never cached and never returned to the view; only quota figures are. Network access is limited to the eight vendor hosts declared in net.domains."
+    },
+    "zh-CN": {
+      "name": "订阅额度",
+      "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
+      "safetyNotes": "只显示插件真正拿到凭据的账号，其余一律不显示。凭据只有两个来源：① 你在本插件私有设置里填写的令牌；② 本机已登录的 CLI / 编辑器留下的凭据文件，由插件进程内的 Node fs 读取——~/.claude/.credentials.json（Claude Code）、~/.codex/auth.json（Codex CLI）、github-copilot 的 hosts.json / apps.json。插件刻意不读取 PI-Desktop 自己的加密密钥库（<dataDir>/secrets）：它的 OAuth 凭据是被有意隔离在插件之外的，所以只在 PI-Desktop 设置里登录过的账号，在没有另填令牌之前不会显示任何内容。令牌不写日志、不进缓存、不返回给界面；返回的只有额度数字。联网仅限 net.domains 里声明的八个服务商域名。"
+    }
+  },
+  "main": "main.js",
+  "ui": {
+    "panel": "views/quota.html",
+    "title": {
+      "en": "Subscription Quotas",
+      "zh-CN": "订阅额度"
+    },
+    "width": 540,
+    "height": 680
+  },
+  "contributes": {
+    "views": [
+      {
+        "id": "quota",
+        "title": {
+          "en": "Subscription Quotas",
+          "zh-CN": "订阅额度"
+        },
+        "icon": "target",
+        "entry": "views/quota.html",
+        "order": 25
+      }
+    ],
+    "commands": [
+      {
+        "id": "quota.open",
+        "title": "Subscription Quotas: Open Panel",
+        "keywords": [
+          "quota",
+          "usage",
+          "limit",
+          "额度",
+          "剩余",
+          "claude",
+          "chatgpt",
+          "copilot",
+          "openrouter"
+        ],
+        "category": "Subscription"
+      }
+    ],
+    "settings": [
+      {
+        "key": "autoDetect",
+        "title": "自动发现本机已登录的账号",
+        "description": "读取 Claude Code / Codex / Copilot 留下的凭据文件；找不到的账号不会显示。",
+        "type": "boolean",
+        "default": true
+      },
+      {
+        "key": "demoMode",
+        "title": "演示数据（不访问网络）",
+        "description": "只渲染内置示例账号，便于预览界面。",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "refreshSeconds",
+        "title": "自动刷新间隔（秒）",
+        "description": "面板打开时轮询新数据的间隔，最小 30 秒。",
+        "type": "number",
+        "default": 300
+      },
+      {
+        "key": "credentials",
+        "title": "手工令牌（JSON 对象）",
+        "description": "厂商 id → 令牌。例如 {\"openrouter\":\"sk-or-...\",\"anthropic\":\"...\",\"openai-codex\":\"...\",\"github-copilot\":\"...\",\"kimi-coding\":\"...\",\"meta\":\"...\",\"radius\":\"...\",\"xai\":\"...\"}。填了才算已登录。",
+        "type": "json",
+        "default": {}
+      },
+      {
+        "key": "sources",
+        "title": "自定义额度来源（JSON 数组）",
+        "description": "给没有内置适配器的厂商配置接口：{ vendor, label, url, token?, headers?, windows?: [{ path, period?, usedField?, resetField?, minutesField?, label? }] }。不写 windows 时按常见字段名自动识别。",
+        "type": "json",
+        "default": []
+      },
+      {
+        "key": "accounts",
+        "title": "手动额度（JSON 数组，不联网）",
+        "description": "直接手填窗口：{ id, label, plan?, windows: [{ period, label?, used?, limit?, unit?, usedPercent?, resetsAt? }] }。period 取 session / day / week / month / credit。",
+        "type": "json",
+        "default": []
+      }
+    ]
+  },
+  "permissions": ["ui.view", "ui.panel", "net.fetch"],
+  "net": {
+    "domains": [
+      "api.anthropic.com",
+      "chatgpt.com",
+      "api.github.com",
+      "openrouter.ai",
+      "api.kimi.com",
+      "api.meta.ai",
+      "radius.pi.dev",
+      "api.x.ai"
+    ]
+  },
+  "engines": {
+    "piDesktop": ">=0.9.0"
+  },
+  "activationEvents": ["onStartup", "onCommand:quota.open"]
+}

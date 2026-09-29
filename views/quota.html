@@ -1,0 +1,1069 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="pi-plugin-chrome" content="v2" />
+    <title>订阅额度</title>
+    <style>
+      /*
+       * 视觉系统对齐 PI-Desktop 设计令牌（apps/desktop/src/styles/tokens.css）。
+       * 面板页是沙箱页，宿主不会注入 tokens.css，所以这里把同一套取值本地化，
+       * 深色为默认、浅色按 app.getAppearance().base 切到 data-base="light"。
+       */
+      :root {
+        color-scheme: dark;
+        --q-bg: #181818;
+        --q-surface: #212121;
+        --q-surface-2: #282828;
+        --q-inset: #0d0d0d;
+        --q-elevated: color-mix(in oklab, #212121 96%, transparent);
+        --q-fg: #ffffff;
+        --q-secondary: color-mix(in oklab, #ffffff 70%, transparent);
+        --q-muted: color-mix(in oklab, #ffffff 52%, transparent);
+        --q-faint: color-mix(in oklab, #ffffff 38%, transparent);
+        --q-border: color-mix(in oklab, #ffffff 8%, transparent);
+        --q-border-strong: color-mix(in oklab, #ffffff 14%, transparent);
+        --q-tile: color-mix(in oklab, #ffffff 3.5%, transparent);
+        --q-tile-hover: color-mix(in oklab, #ffffff 6%, transparent);
+        --q-tile-deep: color-mix(in oklab, #ffffff 8%, transparent);
+        /* 底槽 = 已用（灰），填充 = 剩余（按风险着色）。 */
+        --q-track: color-mix(in oklab, #ffffff 12%, transparent);
+        --q-accent: #ffffff;
+        --q-on-accent: #181818;
+        --q-good: #40c977;
+        --q-warn: #ff8549;
+        --q-bad: #ff6764;
+        --q-radius-xs: 8px;
+        --q-radius-sm: 10px;
+        --q-radius-md: 12px;
+        --q-radius-lg: 16px;
+        --q-radius-full: 9999px;
+        --q-font:
+          13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        --q-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, monospace;
+        --q-motion: 150ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      :root[data-base="light"] {
+        color-scheme: light;
+        --q-bg: #ffffff;
+        --q-surface: #f9f9f9;
+        --q-surface-2: #f3f3f3;
+        --q-inset: #ededed;
+        --q-elevated: color-mix(in oklab, #ffffff 70%, transparent);
+        --q-fg: #1a1c1f;
+        --q-secondary: color-mix(in oklab, #1a1c1f 74%, transparent);
+        --q-muted: #5d5d5d;
+        --q-faint: #afafaf;
+        --q-border: color-mix(in oklab, #1a1c1f 8%, transparent);
+        --q-border-strong: color-mix(in oklab, #1a1c1f 12%, transparent);
+        --q-tile: color-mix(in oklab, #1a1c1f 3.5%, transparent);
+        --q-tile-hover: color-mix(in oklab, #1a1c1f 6%, transparent);
+        --q-tile-deep: color-mix(in oklab, #1a1c1f 8%, transparent);
+        --q-track: color-mix(in oklab, #1a1c1f 12%, transparent);
+        --q-accent: #1a1c1f;
+        --q-on-accent: #ffffff;
+        --q-good: #00a240;
+        --q-warn: #e25507;
+        --q-bad: #e02e2a;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+      }
+
+      body {
+        min-height: 100vh;
+        /* 面板是 46px 拖拽带 + 内容；停靠视图是 0px。用令牌，别写死。 */
+        padding: calc(var(--pi-plugin-titlebar-height, 0px) + 14px) 14px 22px;
+        background: var(--q-bg);
+        color: var(--q-fg);
+        font: var(--q-font);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* ── 头部 ─────────────────────────────────────────────────────────── */
+
+      .qp-head {
+        position: sticky;
+        top: var(--pi-plugin-titlebar-height, 0px);
+        z-index: 5;
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 4px 2px 10px;
+        /* 头部实心遮住滚过来的内容，下方用伪元素做一段渐隐，避免文字透出。 */
+        background: var(--q-bg);
+        border-bottom: 1px solid transparent;
+        -webkit-app-region: drag;
+      }
+      .qp-head::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 100%;
+        height: 10px;
+        background: linear-gradient(var(--q-bg), transparent);
+        pointer-events: none;
+      }
+      .qp-head button,
+      .qp-head a,
+      .qp-head [role="button"] {
+        -webkit-app-region: no-drag;
+      }
+      .qp-head-main {
+        flex: 1;
+        min-width: 0;
+      }
+      .qp-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 560;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+      }
+      .qp-sub {
+        margin: 2px 0 0;
+        font-size: 11.5px;
+        color: var(--q-muted);
+      }
+      .qp-head-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding-top: 2px;
+      }
+      .qp-updated {
+        font-size: 11px;
+        color: var(--q-faint);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      /* ── 控件 ─────────────────────────────────────────────────────────── */
+
+      .qp-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--q-border);
+        border-radius: var(--q-radius-xs);
+        background: var(--q-tile);
+        color: var(--q-secondary);
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+        transition:
+          background var(--q-motion),
+          color var(--q-motion),
+          border-color var(--q-motion);
+      }
+      .qp-btn:hover {
+        background: var(--q-tile-hover);
+        color: var(--q-fg);
+      }
+      .qp-btn:active {
+        transform: translateY(1px);
+      }
+      .qp-btn:focus-visible {
+        outline: 2px solid var(--q-fg);
+        outline-offset: 2px;
+      }
+      .qp-btn[disabled] {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .qp-btn-icon {
+        width: 28px;
+        padding: 0;
+        font-size: 14px;
+      }
+      .qp-btn-primary {
+        background: var(--q-accent);
+        color: var(--q-on-accent);
+        border-color: transparent;
+      }
+      .qp-btn-primary:hover {
+        background: var(--q-accent);
+        color: var(--q-on-accent);
+        opacity: 0.86;
+      }
+      .qp-btn .qp-spin {
+        display: inline-block;
+        animation: qp-rotate 0.9s linear infinite;
+      }
+      @keyframes qp-rotate {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ── 提示条 ──────────────────────────────────────────────────────── */
+
+      .qp-banner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 10px;
+        padding: 8px 10px;
+        border-radius: var(--q-radius-sm);
+        background: var(--q-tile);
+        color: var(--q-secondary);
+        font-size: 12px;
+      }
+      .qp-banner .qp-banner-text {
+        flex: 1;
+        min-width: 0;
+      }
+      .qp-dot {
+        flex: none;
+        width: 6px;
+        height: 6px;
+        border-radius: var(--q-radius-round, 50%);
+        background: var(--q-muted);
+      }
+      .qp-dot-good {
+        background: var(--q-good);
+      }
+      .qp-dot-warn {
+        background: var(--q-warn);
+      }
+      .qp-dot-bad {
+        background: var(--q-bad);
+      }
+
+      /* ── 账号卡片 ────────────────────────────────────────────────────── */
+
+      .qp-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .qp-card {
+        border: 1px solid var(--q-border);
+        border-radius: var(--q-radius-md);
+        background: var(--q-surface);
+        overflow: hidden;
+      }
+      .qp-card-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 11px 12px;
+        border-bottom: 1px solid var(--q-border);
+      }
+      .qp-brand {
+        flex: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: var(--q-radius-xs);
+        background: var(--q-tile-deep);
+        color: var(--q-fg);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        text-transform: uppercase;
+      }
+      .qp-brand[data-p="claude"] {
+        background: color-mix(in oklab, var(--q-warn) 22%, transparent);
+        color: var(--q-warn);
+      }
+      .qp-brand[data-p="codex"] {
+        background: color-mix(in oklab, var(--q-good) 22%, transparent);
+        color: var(--q-good);
+      }
+      .qp-card-title {
+        flex: 1;
+        min-width: 0;
+      }
+      .qp-name {
+        display: block;
+        font-size: 13px;
+        font-weight: 560;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .qp-card-meta {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 2px;
+      }
+      .qp-chip {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: var(--q-radius-full);
+        background: var(--q-tile-deep);
+        color: var(--q-secondary);
+        font-size: 10.5px;
+        letter-spacing: 0.01em;
+        text-transform: lowercase;
+        white-space: nowrap;
+      }
+      .qp-chip-warn {
+        color: var(--q-warn);
+        background: color-mix(in oklab, var(--q-warn) 16%, transparent);
+      }
+      .qp-chip-bad {
+        color: var(--q-bad);
+        background: color-mix(in oklab, var(--q-bad) 16%, transparent);
+      }
+      .qp-chip-good {
+        color: var(--q-good);
+        background: color-mix(in oklab, var(--q-good) 16%, transparent);
+      }
+
+      /* ── 额度窗口 ────────────────────────────────────────────────────── */
+
+      .qp-windows {
+        display: flex;
+        flex-direction: column;
+      }
+      .qp-window {
+        padding: 10px 12px 11px;
+        border-top: 1px solid var(--q-border);
+      }
+      .qp-window:first-child {
+        border-top: none;
+      }
+      .qp-window-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+      }
+      .qp-window-name {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        min-width: 0;
+      }
+      .qp-window-label {
+        font-size: 12.5px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .qp-window-span {
+        font-size: 10.5px;
+        color: var(--q-faint);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .qp-window-pct {
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+        flex: none;
+      }
+      .qp-window-pct b {
+        font-size: 14px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        font-variant-numeric: tabular-nums;
+      }
+      .qp-window-pct span {
+        font-size: 10.5px;
+        color: var(--q-muted);
+      }
+      .qp-window-pct[data-sev="good"] b {
+        color: var(--q-good);
+      }
+      .qp-window-pct[data-sev="warn"] b {
+        color: var(--q-warn);
+      }
+      .qp-window-pct[data-sev="bad"] b {
+        color: var(--q-bad);
+      }
+
+      .qp-bar {
+        position: relative;
+        height: 6px;
+        margin: 8px 0 7px;
+        border-radius: var(--q-radius-full);
+        background: var(--q-track);
+        overflow: hidden;
+      }
+      .qp-bar-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        border-radius: var(--q-radius-full);
+        background: var(--q-muted);
+        transition: width 300ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .qp-bar[data-sev="good"] .qp-bar-fill {
+        background: var(--q-good);
+      }
+      .qp-bar[data-sev="warn"] .qp-bar-fill {
+        background: var(--q-warn);
+      }
+      .qp-bar[data-sev="bad"] .qp-bar-fill {
+        background: var(--q-bad);
+      }
+
+      .qp-window-foot {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 11px;
+        color: var(--q-muted);
+      }
+      .qp-window-foot .qp-reset {
+        font-variant-numeric: tabular-nums;
+        color: var(--q-secondary);
+      }
+      .qp-window-foot .qp-reset[data-soon="true"] {
+        color: var(--q-warn);
+      }
+
+      /* ── 状态行 / 空态 ───────────────────────────────────────────────── */
+
+      .qp-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 10px 12px;
+        font-size: 11.5px;
+        color: var(--q-muted);
+        line-height: 1.5;
+      }
+      .qp-note-error {
+        color: var(--q-bad);
+      }
+      .qp-note code {
+        font-family: var(--q-mono);
+        font-size: 10.5px;
+        padding: 1px 4px;
+        border-radius: 4px;
+        background: var(--q-tile-deep);
+        color: var(--q-secondary);
+      }
+
+      .qp-empty {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        padding: 34px 20px;
+        border: 1px dashed var(--q-border-strong);
+        border-radius: var(--q-radius-md);
+        text-align: center;
+      }
+      .qp-empty h2 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 560;
+      }
+      .qp-empty p {
+        margin: 0;
+        max-width: 40ch;
+        font-size: 12px;
+        color: var(--q-muted);
+        line-height: 1.55;
+      }
+
+      .qp-foot {
+        margin-top: 12px;
+        padding: 0 2px;
+        font-size: 10.5px;
+        color: var(--q-faint);
+        line-height: 1.5;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .qp-btn,
+        .qp-bar-fill {
+          transition: none;
+        }
+        .qp-btn .qp-spin {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="qp-head">
+      <div class="qp-head-main">
+        <h1 class="qp-title" id="title">订阅额度</h1>
+        <p class="qp-sub" id="subtitle">5 小时 · 每周 · 每月额度与剩余</p>
+      </div>
+      <div class="qp-head-actions">
+        <span class="qp-updated" id="updated"></span>
+        <button class="qp-btn qp-btn-icon" id="refresh" type="button" title="刷新">⟳</button>
+      </div>
+    </header>
+
+    <main>
+      <div id="banner"></div>
+      <div class="qp-list" id="list"></div>
+      <div id="foot" class="qp-foot"></div>
+    </main>
+
+    <script>
+      (function () {
+        "use strict";
+
+        // ── 文案 ────────────────────────────────────────────────────────────
+        const COPY = {
+          "zh-CN": {
+            title: "订阅额度",
+            subtitle: "5 小时 · 每周 · 每月额度与剩余",
+            refresh: "刷新",
+            refreshing: "刷新中",
+            updated: (t) => `更新于 ${t}`,
+            never: "尚未更新",
+            remaining: "剩余",
+            usedLabel: (p) => `已用 ${p}%`,
+            demoBanner: "当前显示内置演示数据，不会访问网络。",
+            realBanner: "只显示本机已登录的订阅账号。",
+            exitDemo: "退出演示",
+            enterDemo: "载入演示数据",
+            emptyTitle: "没有已登录的订阅账号",
+            emptyBody:
+              "本插件只展示已登录的账号：已登录的会自动出现，未登录的不会显示。请在登录该服务后回来刷新，也可以在「设置 → 扩展 → 订阅额度」里添加手动账号 JSON。",
+            noWindows: "没有可用的额度窗口",
+            resetAt: (s) => `重置于 ${s}`,
+            resetNow: "即将重置",
+            resetSoon: "不足 1 分钟后重置",
+            resetMinutes: (m) => `${m} 分钟后重置`,
+            resetHours: (h, m) => `${h} 小时${m ? ` ${m} 分` : ""}后重置`,
+            resetDays: (d, h) => `${d} 天${h ? ` ${h} 小时` : ""}后重置`,
+            lowestRemaining: (p) => `剩余最少 ${p}%`,
+            barTitle: (r, u) => `剩余 ${r}% · 已用 ${u}%`,
+            labels: {
+              "window.session": "5 小时额度",
+              "window.day": "日额度",
+              "window.week": "周额度",
+              "window.week.sonnet": "周额度 · Sonnet",
+              "window.week.opus": "周额度 · Opus",
+              "window.week.oauth": "周额度 · 应用",
+              "window.month": "月额度",
+              "window.credit": "额度余额",
+              "window.other": "额度窗口",
+            },
+            span: (m) => `每 ${m}`,
+            standalone:
+              "未运行在 PI-Desktop 面板中，正在显示内置演示数据以便预览界面。",
+            loadFailed: "无法读取额度",
+            retry: "重试",
+          },
+          en: {
+            title: "Subscription Quotas",
+            subtitle: "5-hour · weekly · monthly quota and remaining",
+            refresh: "Refresh",
+            refreshing: "Refreshing",
+            updated: (t) => `Updated ${t}`,
+            never: "Not updated yet",
+            remaining: "remaining",
+            usedLabel: (p) => `${p}% used`,
+            demoBanner: "Showing built-in demo data. No network access.",
+            realBanner: "Showing only subscription accounts signed in on this machine.",
+            exitDemo: "Exit demo",
+            enterDemo: "Load demo data",
+            emptyTitle: "No signed-in subscription account",
+            emptyBody:
+              "Only signed-in accounts are shown: signed-in ones appear automatically, the rest stay hidden. Sign in to the service and refresh, or add manual account JSON under Settings → Extensions → Subscription Quotas.",
+            noWindows: "No quota window available",
+            resetAt: (s) => `Resets ${s}`,
+            resetNow: "Resetting now",
+            resetSoon: "Resets in under a minute",
+            resetMinutes: (m) => `Resets in ${m} min`,
+            resetHours: (h, m) => `Resets in ${h}h${m ? ` ${m}m` : ""}`,
+            resetDays: (d, h) => `Resets in ${d}d${h ? ` ${h}h` : ""}`,
+            lowestRemaining: (p) => `lowest ${p}% remaining`,
+            barTitle: (r, u) => `${r}% remaining · ${u}% used`,
+            labels: {
+              "window.session": "5-hour limit",
+              "window.day": "Daily limit",
+              "window.week": "Weekly limit",
+              "window.week.sonnet": "Weekly · Sonnet",
+              "window.week.opus": "Weekly · Opus",
+              "window.week.oauth": "Weekly · apps",
+              "window.month": "Monthly limit",
+              "window.credit": "Credit balance",
+              "window.other": "Quota window",
+            },
+            span: (m) => `every ${m}`,
+            standalone:
+              "Not running inside a PI-Desktop panel; showing built-in demo data to preview the interface.",
+            loadFailed: "Could not read quotas",
+            retry: "Retry",
+          },
+        };
+
+        // ── 状态 ────────────────────────────────────────────────────────────
+        let locale = "zh-CN";
+        let snapshot = null;
+        let loading = false;
+        let standalone = !(window.pluginBridge && window.pluginBridge.invoke);
+        let pollTimer = null;
+        let tickTimer = null;
+
+        const el = (id) => document.getElementById(id);
+        const t = () => COPY[locale] || COPY["zh-CN"];
+
+        function bridgeInvoke(channel, payload) {
+          if (!window.pluginBridge || !window.pluginBridge.invoke) {
+            return Promise.reject(new Error("pluginBridge unavailable"));
+          }
+          return window.pluginBridge.invoke(channel, payload);
+        }
+
+        // ── 格式化 ──────────────────────────────────────────────────────────
+        function escapeHtml(value) {
+          return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        /**
+         * 颜色按「剩余」判定：绿色 = 还剩很多，橙/红 = 快用完。
+         * 阈值与「已用 <70 / 70–90 / ≥90」等价，只是换了参照物。
+         */
+        function severity(remainingPercent) {
+          if (remainingPercent < 10) return "bad";
+          if (remainingPercent < 30) return "warn";
+          return "good";
+        }
+
+        function formatClock(iso) {
+          const d = new Date(iso);
+          if (Number.isNaN(d.getTime())) return "";
+          return d.toLocaleTimeString(locale === "en" ? "en-US" : "zh-CN", {
+            hour: "2-digit",
+            minute: "2-digit",
+          });
+        }
+
+        /** 窗口时长的人话：300 分钟 → 5 小时，10080 → 7 天。 */
+        function humanizeMinutes(minutes) {
+          const m = Number(minutes);
+          if (!Number.isFinite(m) || m <= 0) return null;
+          if (m < 60) return locale === "en" ? `${m} min` : `${m} 分钟`;
+          if (m % 1440 === 0) {
+            const d = m / 1440;
+            return locale === "en" ? `${d} days` : `${d} 天`;
+          }
+          if (m % 60 === 0) {
+            const h = m / 60;
+            return locale === "en" ? `${h} hours` : `${h} 小时`;
+          }
+          return locale === "en" ? `${Math.round(m / 60)} hours` : `${Math.round(m / 60)} 小时`;
+        }
+
+        function resetText(iso) {
+          const c = t();
+          if (!iso) return "";
+          const target = Date.parse(iso);
+          if (!Number.isFinite(target)) return "";
+          const ms = target - Date.now();
+          if (ms <= 0) return c.resetNow;
+          if (ms < 60_000) return c.resetSoon;
+          const minutes = Math.floor(ms / 60_000);
+          if (minutes < 60) return c.resetMinutes(minutes);
+          const hours = Math.floor(minutes / 60);
+          if (hours < 24) return c.resetHours(hours, minutes % 60);
+          const days = Math.floor(hours / 24);
+          return c.resetDays(days, hours % 24);
+        }
+
+        function windowLabel(win) {
+          const c = t();
+          if (win.customLabel) return win.customLabel;
+          return (c.labels && c.labels[win.labelKey]) || c.labels["window.other"];
+        }
+
+        function actionButton(action, label, primary) {
+          return `<button class="qp-btn${primary ? " qp-btn-primary" : ""}" type="button" data-action="${action}">${escapeHtml(label)}</button>`;
+        }
+
+        // ── 渲染 ────────────────────────────────────────────────────────────
+        function renderWindow(win) {
+          const c = t();
+          const used = Math.max(0, Math.min(100, Number(win.usedPercent) || 0));
+          const remaining = Math.max(
+            0,
+            Math.min(100, win.remainingPercent == null ? 100 - used : Number(win.remainingPercent)),
+          );
+          const sev = severity(remaining);
+          // 进度条 = 剩余（绿），底槽 = 已用（灰）。百分比文本只格式化一次。
+          const remainingText = remaining.toFixed(remaining % 1 === 0 ? 0 : 1);
+          const usedText = used.toFixed(used % 1 === 0 ? 0 : 1);
+          const span = humanizeMinutes(win.windowMinutes);
+          const reset = resetText(win.resetsAt);
+          const resetTitle = win.resetsAt ? formatClock(win.resetsAt) : "";
+          const counts =
+            win.used != null && win.limit != null
+              ? `${win.used}${win.unit ? " " + win.unit : ""} / ${win.limit}${win.unit ? " " + win.unit : ""}`
+              : c.usedLabel(usedText);
+
+          return `
+            <div class="qp-window">
+              <div class="qp-window-head">
+                <div class="qp-window-name">
+                  <span class="qp-window-label">${escapeHtml(windowLabel(win))}</span>
+                  ${span ? `<span class="qp-window-span">${escapeHtml(c.span(span))}</span>` : ""}
+                </div>
+                <span class="qp-window-pct" data-sev="${sev}">
+                  <b>${remainingText}%</b>
+                  <span>${escapeHtml(c.remaining)}</span>
+                </span>
+              </div>
+              <div class="qp-bar" data-sev="${sev}" role="progressbar"
+                   aria-valuemin="0" aria-valuemax="100" aria-valuenow="${remaining}"
+                   aria-label="${escapeHtml(windowLabel(win))}"
+                   title="${escapeHtml(c.barTitle(remainingText, usedText))}">
+                <div class="qp-bar-fill" style="width:${remaining}%"></div>
+              </div>
+              <div class="qp-window-foot">
+                <span>${escapeHtml(counts)}</span>
+                ${
+                  reset
+                    ? `<span class="qp-reset" data-resets="${escapeHtml(win.resetsAt || "")}"
+                        ${resetTitle ? `title="${escapeHtml(resetTitle)}"` : ""}>${escapeHtml(reset)}</span>`
+                    : ""
+                }
+              </div>
+            </div>`;
+        }
+
+        function renderAccount(account) {
+          const c = t();
+          const windows = Array.isArray(account.windows) ? account.windows : [];
+          // 「最紧张」= 剩余最少的那个窗口，颜色也按它判定。
+          const lowestRemaining = windows.reduce((min, w) => {
+            const value =
+              w.remainingPercent == null
+                ? 100 - (Number(w.usedPercent) || 0)
+                : Number(w.remainingPercent);
+            return Math.min(min, Math.max(0, Math.min(100, value)));
+          }, 100);
+          const sev = windows.length ? severity(lowestRemaining) : null;
+          const initial = (account.label || account.provider || "?").trim().charAt(0);
+          const chips = [];
+          if (account.plan) chips.push(`<span class="qp-chip">${escapeHtml(account.plan)}</span>`);
+          if (account.demo) chips.push(`<span class="qp-chip">demo</span>`);
+          if (account.manual) chips.push(`<span class="qp-chip">manual</span>`);
+          if (windows.length) {
+            chips.push(
+              `<span class="qp-chip qp-chip-${sev}">${escapeHtml(
+                c.lowestRemaining(lowestRemaining.toFixed(lowestRemaining % 1 === 0 ? 0 : 1)),
+              )}</span>`,
+            );
+          }
+
+          let body = "";
+          if (windows.length) {
+            body = `<div class="qp-windows">${windows.map(renderWindow).join("")}</div>`;
+          } else if (account.status === "error") {
+            body = `<div class="qp-note qp-note-error"><span>${escapeHtml(
+              account.error || c.loadFailed,
+            )}</span></div>`;
+          } else {
+            body = `<div class="qp-note"><span>${escapeHtml(
+              account.hint || c.noWindows,
+            )}</span></div>`;
+          }
+
+          const dotClass =
+            account.status === "ok"
+              ? sev === "bad"
+                ? "qp-dot qp-dot-bad"
+                : sev === "warn"
+                  ? "qp-dot qp-dot-warn"
+                  : "qp-dot qp-dot-good"
+              : account.status === "error"
+                ? "qp-dot qp-dot-bad"
+                : "qp-dot";
+
+          return `
+            <article class="qp-card">
+              <div class="qp-card-head">
+                <span class="qp-brand" data-p="${escapeHtml(
+                  (account.provider || "").toLowerCase(),
+                )}">${escapeHtml(initial)}</span>
+                <div class="qp-card-title">
+                  <span class="qp-name" title="${escapeHtml(account.label || "")}">${escapeHtml(
+                    account.label || account.provider || "",
+                  )}</span>
+                  ${chips.length ? `<div class="qp-card-meta">${chips.join("")}</div>` : ""}
+                </div>
+                <span class="${dotClass}" aria-hidden="true"></span>
+              </div>
+              ${body}
+            </article>`;
+        }
+
+        function renderBanner() {
+          const c = t();
+          const node = el("banner");
+          if (!snapshot) {
+            node.innerHTML = "";
+            return;
+          }
+          if (snapshot.demo) {
+            node.innerHTML = `<div class="qp-banner"><span class="qp-dot qp-dot-warn"></span><span class="qp-banner-text">${escapeHtml(
+              c.demoBanner,
+            )}</span>${actionButton("exit-demo", c.exitDemo, false)}</div>`;
+          } else if (snapshot.autoDetect) {
+            node.innerHTML = `<div class="qp-banner"><span class="qp-dot qp-dot-good"></span><span class="qp-banner-text">${escapeHtml(
+              c.realBanner,
+            )}</span></div>`;
+          } else {
+            node.innerHTML = "";
+          }
+        }
+
+        function render() {
+          const c = t();
+          el("title").textContent = c.title;
+          el("subtitle").textContent = c.subtitle;
+          document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+
+          const refreshBtn = el("refresh");
+          refreshBtn.title = loading ? c.refreshing : c.refresh;
+          refreshBtn.disabled = loading;
+          refreshBtn.innerHTML = loading ? '<span class="qp-spin">⟳</span>' : "⟳";
+
+          renderBanner();
+
+          const list = el("list");
+          const accounts = snapshot && Array.isArray(snapshot.accounts) ? snapshot.accounts : [];
+          if (!snapshot) {
+            list.innerHTML = "";
+          } else if (!accounts.length) {
+            list.innerHTML = `<div class="qp-empty">
+                <h2>${escapeHtml(c.emptyTitle)}</h2>
+                <p>${escapeHtml(c.emptyBody)}</p>
+                ${actionButton("enter-demo", c.enterDemo, true)}
+              </div>`;
+          } else {
+            list.innerHTML = accounts.map(renderAccount).join("");
+          }
+
+          const foot = el("foot");
+          const parts = [];
+          if (standalone) parts.push(c.standalone);
+          if (snapshot && snapshot.generatedAt) {
+            parts.push(`${c.updated(formatClock(snapshot.generatedAt))}`);
+          } else if (!standalone) {
+            parts.push(c.never);
+          }
+          foot.innerHTML = parts.map((p) => `<div>${escapeHtml(p)}</div>`).join("");
+
+          el("updated").textContent = snapshot && snapshot.generatedAt
+            ? formatClock(snapshot.generatedAt)
+            : "";
+        }
+
+        /** 只更新倒计时文本，避免整页重渲染打断滚动与动画。 */
+        function tick() {
+          const nodes = document.querySelectorAll(".qp-reset[data-resets]");
+          for (const node of nodes) {
+            const iso = node.getAttribute("data-resets");
+            const text = resetText(iso);
+            if (text) node.textContent = text;
+            const target = Date.parse(iso);
+            if (Number.isFinite(target)) {
+              node.setAttribute("data-soon", target - Date.now() < 30 * 60_000 ? "true" : "false");
+            }
+          }
+        }
+
+        // ── 数据 ────────────────────────────────────────────────────────────
+        const DEMO_SNAPSHOT = (function () {
+          const now = Date.now();
+          const at = (ms) => new Date(now + ms).toISOString();
+          const hour = 3_600_000;
+          const day = 86_400_000;
+          return {
+            ok: true,
+            demo: true,
+            autoDetect: false,
+            refreshSeconds: 300,
+            generatedAt: new Date(now).toISOString(),
+            accounts: [
+              {
+                id: "demo-anthropic",
+                provider: "anthropic",
+                label: "Anthropic (Claude Pro/Max)",
+                plan: "max",
+                status: "ok",
+                demo: true,
+                windows: [
+                  { key: "five_hour", period: "session", labelKey: "window.session", windowMinutes: 300, usedPercent: 23.5, remainingPercent: 76.5, resetsAt: at(2.4 * hour) },
+                  { key: "seven_day", period: "week", labelKey: "window.week", windowMinutes: 10080, usedPercent: 58.1, remainingPercent: 41.9, resetsAt: at(3.4 * day) },
+                  { key: "seven_day_sonnet", period: "week", labelKey: "window.week.sonnet", windowMinutes: 10080, usedPercent: 88.6, remainingPercent: 11.4, resetsAt: at(3.4 * day) },
+                ],
+              },
+              {
+                id: "demo-openai",
+                provider: "openai-codex",
+                label: "OpenAI (ChatGPT Plus/Pro)",
+                plan: "plus",
+                status: "ok",
+                demo: true,
+                windows: [
+                  { key: "session-300", period: "session", labelKey: "window.session", windowMinutes: 300, usedPercent: 12, remainingPercent: 88, resetsAt: at(4.1 * hour) },
+                  { key: "week-10080", period: "week", labelKey: "window.week", windowMinutes: 10080, usedPercent: 41.7, remainingPercent: 58.3, resetsAt: at(5.2 * day) },
+                ],
+              },
+              {
+                id: "demo-copilot",
+                provider: "github-copilot",
+                label: "GitHub Copilot",
+                plan: "business",
+                status: "ok",
+                demo: true,
+                windows: [
+                  { key: "copilot-premium", period: "month", labelKey: "window.month", customLabel: "高级请求", windowMinutes: 43200, usedPercent: 32, remainingPercent: 68, resetsAt: at(12 * day) },
+                  { key: "copilot-chat", period: "month", labelKey: "window.month", customLabel: "聊天", windowMinutes: 43200, usedPercent: 7.5, remainingPercent: 92.5, resetsAt: at(12 * day) },
+                ],
+              },
+              {
+                id: "demo-openrouter",
+                provider: "openrouter",
+                label: "OpenRouter",
+                status: "ok",
+                demo: true,
+                windows: [
+                  { key: "openrouter-credit", period: "credit", labelKey: "window.credit", usedPercent: 27.4, remainingPercent: 72.6, used: 2.74, limit: 10, unit: "USD" },
+                ],
+              },
+            ],
+          };
+        })();
+
+        function schedulePoll() {
+          if (pollTimer) clearTimeout(pollTimer);
+          const seconds = Math.max(
+            30,
+            Number(snapshot && snapshot.refreshSeconds) || 300,
+          );
+          pollTimer = setTimeout(() => {
+            void load({ silent: true });
+          }, seconds * 1000);
+        }
+
+        async function load(options) {
+          const silent = options && options.silent;
+          if (loading) return;
+          loading = true;
+          if (!silent) render();
+          try {
+            if (standalone) {
+              snapshot = DEMO_SNAPSHOT;
+            } else {
+              const result = await bridgeInvoke("quota.snapshot", { force: !!(options && options.force) });
+              if (result && result.ok) {
+                snapshot = result;
+              } else if (!snapshot) {
+                snapshot = { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 300 };
+              }
+            }
+          } catch (error) {
+            if (!snapshot) {
+              snapshot = { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 300 };
+            }
+          } finally {
+            loading = false;
+            render();
+            schedulePoll();
+          }
+        }
+
+        async function setDemo(enabled) {
+          if (standalone) {
+            snapshot = enabled ? DEMO_SNAPSHOT : { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 300 };
+            render();
+            return;
+          }
+          loading = true;
+          render();
+          try {
+            const result = await bridgeInvoke("quota.setDemo", { enabled });
+            if (result && result.ok) snapshot = result;
+          } catch {
+            /* 保持现状 */
+          } finally {
+            loading = false;
+            render();
+            schedulePoll();
+          }
+        }
+
+        // ── 事件 ────────────────────────────────────────────────────────────
+        el("refresh").addEventListener("click", () => {
+          void load({ force: true });
+        });
+
+        document.addEventListener("click", (event) => {
+          const target = event.target.closest("[data-action]");
+          if (!target) return;
+          const action = target.getAttribute("data-action");
+          if (action === "enter-demo") void setDemo(true);
+          else if (action === "exit-demo") void setDemo(false);
+        });
+
+        function applyAppearance(appearance) {
+          const base =
+            appearance && (appearance.base === "light" || appearance.base === "dark")
+              ? appearance.base
+              : window.matchMedia("(prefers-color-scheme: light)").matches
+                ? "light"
+                : "dark";
+          document.documentElement.dataset.base = base;
+          const nextLocale =
+            appearance && typeof appearance.locale === "string" && appearance.locale
+              ? appearance.locale.toLowerCase().startsWith("zh")
+                ? "zh-CN"
+                : "en"
+              : locale;
+          if (nextLocale !== locale) {
+            locale = nextLocale;
+            render();
+          }
+        }
+
+        if (window.pluginBridge && window.pluginBridge.on) {
+          window.pluginBridge.on("appearance:changed", applyAppearance);
+        }
+
+        if (standalone) {
+          applyAppearance(null);
+          void load({});
+        } else {
+          bridgeInvoke("app.getAppearance")
+            .then(applyAppearance)
+            .catch(() => applyAppearance(null));
+          void load({});
+        }
+
+        tickTimer = setInterval(tick, 1000);
+        window.addEventListener("beforeunload", () => {
+          if (pollTimer) clearTimeout(pollTimer);
+          if (tickTimer) clearInterval(tickTimer);
+        });
+      })();
+    </script>
+  </body>
+</html>
