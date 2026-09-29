@@ -3,7 +3,7 @@
 /**
  * 订阅额度 — PI-Desktop 插件主进程
  *
- * 插件 id: local.subscription-quota
+ * 插件 id: io.github.czp0312.subscription-quota
  * 视图:    contributes.views[0] → views/quota.html（右侧工作面板）
  * 面板:    ui.panel → views/quota.html（命令 quota.open 打开）
  *

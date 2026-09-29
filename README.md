@@ -65,7 +65,7 @@
 
 1. 打开 **插件**（扩展）页。
 2. 右上角溢出菜单 → **安装插件包**。
-3. 选择 `local.subscription-quota-<版本>.piplug`。
+3. 选择 `io.github.czp0312.subscription-quota-<版本>.piplug`。
 4. 审阅权限后安装（`net.fetch` 属高风险权限，需你显式授权）。
 
 插件包从本仓库的 [Releases](../../releases) 下载，或按下方「打包」一节自行构建。
@@ -177,7 +177,7 @@ pnpm install
 pnpm --filter @pi-desktop/plugin-devkit... build
 pnpm pi-plugin check <本仓库路径>
 pnpm pi-plugin pack  <本仓库路径>
-# → dist/local.subscription-quota-0.2.0.piplug
+# → dist/io.github.czp0312.subscription-quota-0.2.0.piplug
 ```
 
 生成的 `.piplug` 是 store-only ZIP，请勿用普通 `zip` 重打（安装器只接受未压缩归档）。

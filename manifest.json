@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "local.subscription-quota",
+  "id": "io.github.czp0312.subscription-quota",
   "name": "订阅额度",
   "version": "0.2.0",
   "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
