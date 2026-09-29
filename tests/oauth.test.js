@@ -3,7 +3,6 @@ const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
-const os = require("node:os");
 const path = require("node:path");
 const http = require("node:http");
 const { createAuth, listenCallback } = require("../lib/oauth");
@@ -42,12 +41,12 @@ test("ChatGPT PKCE login without CLI; whitelist status; plugin-only logout", asy
   const challenge = crypto.createHash("sha256").update(body.get("code_verifier")).digest("base64url");
   assert.equal(challenge, new URL(login.url).searchParams.get("code_challenge"));
   assert.equal(body.get("redirect_uri"), "http://localhost:1455/auth/callback");
-  assert.equal((await f.auth.credential("openai-codex")).accountId, "acct-123");
+  assert.equal((await f.auth.credential(login.accountId)).accountId, "acct-123");
   assert.equal(f.closed, 1);
   for (const secret of [access, "test-refresh", body.get("code_verifier"), "test-code"]) assert.ok(!JSON.stringify(result).includes(secret));
-  await f.auth.logout("openai-codex");
-  assert.equal(await f.auth.credential("openai-codex"), null);
-  assert.deepEqual(f.saved, {});
+  await f.auth.logout(login.accountId);
+  assert.equal(await f.auth.credential(login.accountId), null);
+  assert.deepEqual(f.saved, { version: 2, accounts: [] });
 });
 
 test("Claude uses JSON token exchange and validates callback state/origin", async (t) => {
@@ -89,11 +88,12 @@ test("late token exchange after cancellation never persists", async (t) => {
   await f.auth.cancel(login.id);
   gate.resolve(response(token()));
   assert.equal((await submitted).login.status, "cancelled");
-  assert.deepEqual(f.saved, {});
+  assert.deepEqual(f.saved, { version: 2, accounts: [] });
 });
 
 test("cancellation during disk save rolls back new credentials", async (t) => {
   const f = fixture(t);
+  await f.auth.status(); // Complete first-load migration before blocking login writes.
   const gate = deferred();
   const save = f.store.save;
   let count = 0;
@@ -104,30 +104,30 @@ test("cancellation during disk save rolls back new credentials", async (t) => {
   await f.auth.cancel(login.id);
   gate.resolve();
   await submitted;
-  assert.deepEqual(f.saved, {});
+  assert.deepEqual(f.saved, { version: 2, accounts: [] });
 });
 
 test("expired token refresh is deduplicated, rotation persisted, no quota request needed", async (t) => {
   const f = fixture(t, { "openai-codex": { access: "old", refresh: "old-refresh", expires: 0 } });
-  const results = await Promise.all(Array.from({ length: 8 }, () => f.auth.credential("openai-codex")));
+  const results = await Promise.all(Array.from({ length: 8 }, () => f.auth.credential("legacy-openai-codex")));
   assert.ok(results.every((c) => c.token === "test-access"));
   assert.equal(f.requests.length, 1);
   assert.equal(new URLSearchParams(f.requests[0].body).get("grant_type"), "refresh_token");
-  assert.equal(f.saved["openai-codex"].refresh, "test-refresh");
-  await f.auth.credential("openai-codex");
+  assert.equal(f.saved.accounts[0].credential.refresh, "test-refresh");
+  await f.auth.credential("legacy-openai-codex");
   assert.equal(f.requests.length, 1);
 });
 
 test("logout during refresh cannot resurrect the credential", async (t) => {
   const gate = deferred();
   const f = fixture(t, { anthropic: { access: "old", refresh: "old-refresh", expires: 0 } }, () => gate.promise);
-  const refreshed = f.auth.credential("anthropic");
+  const refreshed = f.auth.credential("legacy-anthropic");
   const rejected = assert.rejects(refreshed, { code: "AUTH_CANCELLED" });
   await flush();
-  await f.auth.logout("anthropic");
+  await f.auth.logout("legacy-anthropic");
   gate.resolve(response(token()));
   await rejected;
-  assert.deepEqual(f.saved, {});
+  assert.deepEqual(f.saved, { version: 2, accounts: [] });
 });
 
 test("invalid grants and malicious token errors never leak response contents", async (t) => {
@@ -136,7 +136,7 @@ test("invalid grants and malicious token errors never leak response contents", a
   const result = await f.auth.submit(login.id, redirect(login));
   assert.equal(result.login.status, "error");
   assert.ok(!JSON.stringify(result).includes("secret-leak"));
-  assert.deepEqual(f.saved, {});
+  assert.deepEqual(f.saved, { version: 2, accounts: [] });
 });
 
 test("device flow respects initial interval and slow_down; hides device token", async (t) => {
@@ -156,7 +156,7 @@ test("device flow respects initial interval and slow_down; hides device token", 
   t.mock.timers.tick(9999); await flush(); assert.equal(polls, 1);
   t.mock.timers.tick(1); await flush(); assert.equal(polls, 2);
   t.mock.timers.tick(10000); await flush(); assert.equal(polls, 3);
-  assert.equal((await f.auth.credential("github-copilot")).token, "gh-private-token");
+  assert.equal((await f.auth.credential(result.login.accountId)).token, "gh-private-token");
   assert.equal((await f.auth.status()).login.status, "success");
 });
 
@@ -172,11 +172,11 @@ test("browser/port failure leaves manual callback fallback", async (t) => {
 });
 
 test("encrypted store survives restart; tamper/missing key fail closed", async (t) => {
-  const root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR || os.tmpdir(), "quota-store-test-"));
+  const root = await fs.mkdtemp(path.join(process.env.PI_SCRATCH_DIR, "quota-store-test-"));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = createAuthStore(async () => root);
   assert.deepEqual(await store.load(), {});
-  const saved = { anthropic: { access: "sensitive-access", refresh: "sensitive-refresh", expires: 1 } };
+  const saved = { version: 2, accounts: [{ id: "mock-account", vendor: "anthropic", label: "测试账号", credential: { access: "sensitive-access", refresh: "sensitive-refresh", expires: 1 } }] };
   await store.save(saved);
   const bytes = await fs.readFile(path.join(root, "quota-oauth.enc"));
   assert.ok(!bytes.includes(Buffer.from("sensitive-access")));
@@ -215,18 +215,19 @@ test("old refresh started during re-login cannot overwrite the newly authorized 
   const gate = deferred();
   const f = fixture(t, { "openai-codex": { access: "old-account", refresh: "old-refresh", expires: 0 } },
     (input) => new URLSearchParams(input.body).get("grant_type") === "refresh_token" ? gate.promise : response(token("new-account")));
-  const { login } = await f.auth.start("openai-codex");
-  const refresh = f.auth.credential("openai-codex");
+  const { login } = await f.auth.start("openai-codex", { accountId: "legacy-openai-codex" });
+  const refresh = f.auth.credential("legacy-openai-codex");
   const rejected = assert.rejects(refresh, { code: "AUTH_CANCELLED" });
   await flush();
   assert.equal((await f.auth.submit(login.id, redirect(login))).login.status, "success");
   gate.resolve(response(token("refreshed-old-account")));
   await rejected;
-  assert.equal(f.saved["openai-codex"].access, "new-account");
+  assert.equal(f.saved.accounts[0].credential.access, "new-account");
 });
 
 test("timeout while saving rolls back the uncompleted authorization", async (t) => {
   const f = fixture(t);
+  await f.auth.status();
   const gate = deferred();
   const save = f.store.save;
   let count = 0;
@@ -238,5 +239,5 @@ test("timeout while saving rolls back the uncompleted authorization", async (t) 
   assert.equal((await f.auth.status()).login.status, "error");
   gate.resolve();
   await submitted;
-  assert.deepEqual(f.saved, {});
+  assert.deepEqual(f.saved, { version: 2, accounts: [] });
 });

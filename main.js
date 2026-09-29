@@ -15,7 +15,7 @@
  * 这类账号不会出现在界面上；只有真正拿到凭据的账号才会渲染。
  *
  * ── 凭据来源 ────────────────────────────────────────────────────────────────
- * 手工令牌 → 本插件独立 OAuth 授权 → 可关闭的 CLI / 编辑器凭据回退。
+ * 插件 OAuth 多账号与手工令牌分别展示；CLI 仅在无前两者时作为可关闭的回退。
  * 宿主没有供插件复用订阅登录的 API；不读取或解密宿主 SecretStore。
  * ChatGPT / Claude / Copilot 可在面板「管理账号」单独授权，无需安装 CLI。
  * 插件凭据仅保存在自己的数据目录中，界面仅接收非敏感登录状态。
@@ -36,6 +36,7 @@ const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { createAuth } = require("./lib/oauth");
+const { recommendAccounts } = require("./lib/recommendations");
 
 /** 上游请求超时；宿主面板通道整体约 30s，留足余量。 */
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -67,8 +68,7 @@ async function resolveCredential(settings, vendor, cli) {
     const accountId = typeof entry?.accountId === "string" ? entry.accountId : null;
     return { token: supplied, accountId, source: "settings" };
   }
-  const saved = await getAuth().credential(vendor);
-  return saved ?? (settings.autoDetect ? await cli() : null);
+  return settings.autoDetect ? await cli() : null;
 }
 
 // ── 设置 ────────────────────────────────────────────────────────────────────
@@ -698,10 +698,10 @@ async function copilotCliCredentials() {
 //
 // collect(settings) → 账号对象；返回 null 表示「没登录」，界面不显示。
 
-async function collectAnthropic(settings) {
+async function collectAnthropic(settings, _vendor, provided) {
   const vendor = "anthropic";
   const name = "Anthropic (Claude Pro/Max)";
-  const credential = await resolveCredential(settings, vendor, claudeCliCredentials);
+  const credential = provided ?? await resolveCredential(settings, vendor, claudeCliCredentials);
   if (!credential) return null;
   const response = await httpJson("https://api.anthropic.com/api/oauth/usage", {
     accept: "application/json",
@@ -714,6 +714,7 @@ async function collectAnthropic(settings) {
   return {
     id: vendor,
     provider: vendor,
+    source: credential.source === "plugin" ? "plugin" : credential.source === "settings" ? "settings" : "cli",
     label: name,
     plan: credential.plan ?? null,
     status: windows.length ? "ok" : "empty",
@@ -723,10 +724,10 @@ async function collectAnthropic(settings) {
   };
 }
 
-async function collectOpenAiCodex(settings) {
+async function collectOpenAiCodex(settings, _vendor, provided) {
   const vendor = "openai-codex";
   const name = "OpenAI (ChatGPT Plus/Pro)";
-  const credential = await resolveCredential(settings, vendor, codexCliCredentials);
+  const credential = provided ?? await resolveCredential(settings, vendor, codexCliCredentials);
   if (!credential) return null;
 
   const headers = {
@@ -753,6 +754,7 @@ async function collectOpenAiCodex(settings) {
       return {
         id: vendor,
         provider: vendor,
+        source: credential.source === "plugin" ? "plugin" : credential.source === "settings" ? "settings" : "cli",
         label: name,
         plan: typeof plan === "string" ? plan : null,
         status: windows.length ? "ok" : "empty",
@@ -766,10 +768,10 @@ async function collectOpenAiCodex(settings) {
   throw firstError ?? Object.assign(new Error(`${name}: 额度接口不可达`), { code: "NETWORK" });
 }
 
-async function collectCopilot(settings) {
+async function collectCopilot(settings, _vendor, provided) {
   const vendor = "github-copilot";
   const name = "GitHub Copilot";
-  const credential = await resolveCredential(settings, vendor, copilotCliCredentials);
+  const credential = provided ?? await resolveCredential(settings, vendor, copilotCliCredentials);
   if (!credential) return null;
   const response = await httpJson("https://api.github.com/copilot_internal/user", {
     accept: "application/json",
@@ -785,6 +787,7 @@ async function collectCopilot(settings) {
   return {
     id: vendor,
     provider: vendor,
+    source: credential.source === "plugin" ? "plugin" : credential.source === "settings" ? "settings" : "cli",
     label: typeof response.data?.login === "string" ? `${name} · ${response.data.login}` : name,
     plan: typeof plan === "string" ? plan : null,
     status: windows.length ? "ok" : "empty",
@@ -989,7 +992,7 @@ function errorAccount(vendor, error) {
 async function buildSnapshot({ force = false } = {}) {
   const now = Date.now();
   if (!force && cache && now - cache.at < CACHE_TTL_MS) {
-    return { ...cache.snapshot, cached: true };
+    return { ...cache.snapshot, accounts: recommendAccounts(cache.snapshot.accounts, now), cached: true };
   }
 
   const snapshotEpoch = cacheEpoch;
@@ -999,15 +1002,33 @@ async function buildSnapshot({ force = false } = {}) {
   if (settings.demoMode) {
     for (const account of demoSample()) accounts.push(account);
   } else {
+    let saved = [], authError = null;
+    try { saved = await getAuth().listAccounts(); } catch (error) { authError = error; }
     const collected = await Promise.all(VENDORS.map(async (vendor) => {
-      try {
-        // autoDetect controls only CLI files, not explicit/plugin credentials.
-        return await vendor.collect(settings, vendor);
-      } catch (error) {
-        return errorAccount(vendor, error);
+      const pluginAccounts = saved.filter((account) => account.vendor === vendor.id)
+        .sort((a, b) => a.priority - b.priority);
+      const rows = await Promise.all(pluginAccounts.map(async (account) => {
+        let row;
+        try {
+          const credential = await getAuth().credential(account.id);
+          if (!credential) throw Object.assign(new Error("账号已删除，请刷新"), { code: "AUTH_CHANGED" });
+          row = await vendor.collect(settings, vendor, credential);
+        } catch (error) { row = errorAccount(vendor, error); }
+        return { ...row, id: `plugin:${account.id}`, source: "plugin", accountLabel: account.label,
+          label: `${vendor.name} · ${account.label}`, priority: account.priority };
+      }));
+      const oauthVendor = ["anthropic", "openai-codex", "github-copilot"].includes(vendor.id);
+      if (authError && oauthVendor) rows.push({ ...errorAccount(vendor, authError), id: `auth:${vendor.id}` });
+      // Explicit manual credentials remain visible; CLI is only a fallback.
+      if (!pluginAccounts.length || settingsToken(settings, vendor.id)) {
+        try {
+          const external = await vendor.collect(settings, vendor);
+          if (external) rows.push(external);
+        } catch (error) { rows.push(errorAccount(vendor, error)); }
       }
+      return rows;
     }));
-    accounts.push(...collected.filter(Boolean));
+    accounts.push(...collected.flat());
     for (const account of manualAccounts(settings.accounts)) accounts.push(account);
   }
 
@@ -1017,7 +1038,7 @@ async function buildSnapshot({ force = false } = {}) {
     demo: settings.demoMode,
     autoDetect: settings.autoDetect,
     refreshSeconds: settings.refreshSeconds,
-    accounts,
+    accounts: recommendAccounts(accounts),
   };
   if (snapshotEpoch !== cacheEpoch) {
     // Refresh/login/logout occurred while fetching: never cache another epoch.
@@ -1033,12 +1054,14 @@ const CHANNELS = {
   "quota.auth.status": () => getAuth().status(),
   "quota.auth.start": async (payload) => {
     if ((await getSettings()).demoMode) return { ok: false, code: "DEMO_MODE", message: "请先关闭演示模式再登录" };
-    return getAuth().start(payload.vendor);
+    return getAuth().start(payload.vendor, { accountId: payload.accountId, label: payload.label });
   },
   "quota.auth.open": (payload) => getAuth().open(payload.id),
   "quota.auth.submit": (payload) => getAuth().submit(payload.id, payload.input),
   "quota.auth.cancel": (payload) => getAuth().cancel(payload.id),
-  "quota.auth.logout": (payload) => getAuth().logout(payload.vendor),
+  "quota.auth.logout": (payload) => getAuth().logout(payload.accountId),
+  "quota.auth.rename": (payload) => getAuth().rename(payload.accountId, payload.label),
+  "quota.auth.move": (payload) => getAuth().move(payload.accountId, payload.direction),
   "quota.snapshot": (payload) => buildSnapshot({ force: payload?.force === true }),
   "quota.refresh": () => buildSnapshot({ force: true }),
   "quota.setDemo": async (payload) => {

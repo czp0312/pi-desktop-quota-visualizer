@@ -2,25 +2,25 @@
   "schemaVersion": 1,
   "id": "io.github.czp0312.subscription-quota",
   "name": "订阅额度",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
   "author": "czp0312",
   "repository": "https://github.com/czp0312/pi-desktop-quota-visualizer",
   "homepage": "https://github.com/czp0312/pi-desktop-quota-visualizer#readme",
   "license": "MIT",
   "categories": ["productivity"],
-  "changelog": "Release 0.3.0：新增 ChatGPT / Claude / GitHub Copilot 插件内独立 OAuth 登录、令牌刷新与退出，无需安装 CLI；不读取宿主密钥库。修正自动发现开关，关闭后仍可查询插件授权与手工令牌账号。",
-  "safetyNotes": "凭据优先级：手工令牌、本插件独立 OAuth、可关闭的 CLI 凭据回退。不复用或读取 PI-Desktop 密钥库。OAuth 令牌由 Node fs 加密保存到本插件 getDataPath 目录（quota-oauth.enc）；本地密钥 quota-oauth.key 同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间 Node HTTP 仅监听 127.0.0.1:1455/53692，超时或结束关闭。令牌不写日志、不返回界面；联网走 net.fetch 白名单，shell.openExternal 仅打开服务商授权页。退出只清本插件授权，不退出宿主/CLI，也不撤销服务商授权。",
+  "changelog": "Release 0.4.1：修复添加账号在首次失败/取消后无法再次点击的问题；取消额度标题栏吸顶，避免遮挡滚动内容；支持直接在额度卡片编辑账号备注，保存即时反馈并支持失败重试。",
+  "safetyNotes": "插件 OAuth 多账号与手工令牌分别显示，CLI 自动发现仅作回退。优先级和额度推荐仅供手动切换，不控制宿主对话。不复用或读取 PI-Desktop 密钥库。OAuth 令牌由 Node fs 加密保存到本插件 getDataPath 目录（quota-oauth.enc）；本地密钥 quota-oauth.key 同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间 Node HTTP 仅监听 127.0.0.1:1455/53692，超时或结束关闭。令牌不写日志、不返回界面；联网走 net.fetch 白名单，shell.openExternal 仅打开服务商授权页。删除只清选中插件账号，不退出宿主/CLI，也不撤销服务商授权。",
   "i18n": {
     "en": {
       "name": "Subscription Quotas",
       "description": "Visualize the remaining quota of your subscription accounts in the work panel — Anthropic (Claude Pro/Max), OpenAI (ChatGPT Plus/Pro), GitHub Copilot, OpenRouter and more — as 5-hour / weekly / monthly / credit windows with remaining percentage, reset countdown and a progress bar (green = remaining, grey = used). Only accounts signed in on this machine are shown.",
-      "safetyNotes": "Credential priority: manual token, this plugin's independent OAuth login, then optional CLI credentials. Never reads PI-Desktop's secret store. OAuth tokens are encrypted via Node fs in this plugin's getDataPath directory (quota-oauth.enc); the local key quota-oauth.key is stored alongside it, so protection relies on OS file permissions, not an OS keychain. During browser login Node HTTP listens only on 127.0.0.1:1455/53692 and closes on completion or timeout. Tokens are never logged or returned to the panel. Requests use net.fetch's allowlist; shell.openExternal opens vendor authorization pages. Logout removes only this plugin's credentials, not host/CLI logins or vendor grants."
+      "safetyNotes": "Plugin OAuth accounts and manual tokens are displayed separately; optional CLI credentials are a fallback. Priorities and quota recommendations are advisory only and never switch host chat accounts. Never reads PI-Desktop's secret store. OAuth tokens are encrypted via Node fs in this plugin's getDataPath directory (quota-oauth.enc); quota-oauth.key is stored alongside it, so protection relies on OS file permissions, not an OS keychain. During browser login Node HTTP listens only on 127.0.0.1:1455/53692 and closes on completion or timeout. Tokens are never logged or returned to the panel. Requests use net.fetch's allowlist; shell.openExternal opens vendor authorization pages. Removal deletes only the selected plugin account, not host/CLI logins or vendor grants."
     },
     "zh-CN": {
       "name": "订阅额度",
       "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
-      "safetyNotes": "凭据优先级：手工令牌、本插件独立 OAuth、可关闭的 CLI 凭据回退。不读取 PI-Desktop 密钥库。OAuth 令牌在本插件数据目录加密保存，本地密钥同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间仅监听 127.0.0.1:1455/53692，结束或超时关闭。令牌不写日志、不返回界面；联网受域名白名单约束。退出只清插件授权，不影响宿主/CLI 或服务商授权。"
+      "safetyNotes": "插件 OAuth 多账号与手工令牌分别显示，CLI 凭据仅作回退。优先级和推荐仅供手动切换，不改变宿主对话账号。不读取 PI-Desktop 密钥库。OAuth 令牌在本插件数据目录加密保存，本地密钥同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间仅监听 127.0.0.1:1455/53692，结束或超时关闭。令牌不写日志、不返回界面；联网受域名白名单约束。删除只清选中插件账号，不影响宿主/CLI 或服务商授权。"
     }
   },
   "main": "main.js",

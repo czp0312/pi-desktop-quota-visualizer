@@ -12,10 +12,20 @@ const reply = (data, status = 200) => ({ status, bodyText: JSON.stringify(data) 
 function app(settings = {}, pluginCredentials = {}, fetcher) {
   let changed, cliReads = 0;
   const requests = [];
+  let records = Array.isArray(pluginCredentials) ? pluginCredentials : Object.entries(pluginCredentials).map(([vendor, credential]) =>
+    ({ id: `saved-${vendor}`, vendor, label: `${vendor} 1`, credential }));
+  const metadata = () => records.map((r) => ({ id: r.id, vendor: r.vendor, label: r.label,
+    priority: records.filter((a) => a.vendor === r.vendor).indexOf(r) + 1, connected: true }));
   const auth = {
-    credential: async (vendor) => pluginCredentials[vendor] ?? null,
-    status: async () => ({ ok: true, accounts: [], login: null }),
-    logout: async (vendor) => { delete pluginCredentials[vendor]; changed(); return auth.status(); },
+    listAccounts: async () => metadata(),
+    credential: async (id) => records.find((r) => r.id === id)?.credential ?? null,
+    status: async () => ({ ok: true, accounts: metadata(), login: null }),
+    logout: async (id) => { records = records.filter((r) => r.id !== id); changed(); return auth.status(); },
+    rename: async (id, label) => { records.find((r) => r.id === id).label = label; changed(); return auth.status(); },
+    move: async (id, direction) => {
+      const i = records.findIndex((r) => r.id === id), j = i + (direction === "up" ? -1 : 1);
+      [records[i], records[j]] = [records[j], records[i]]; changed(); return auth.status();
+    },
     stop: async () => {},
     start: async () => { throw new Error("must not start in demo"); },
   };
@@ -42,16 +52,16 @@ test("plugin login drives ChatGPT quota with autoDetect off and no CLI", async (
   assert.equal(a.requests[0].headers.authorization, "Bearer private-plugin-token");
   assert.equal(a.cliReads, 0);
   assert.ok(!JSON.stringify(result).includes("private-plugin-token"));
-  await a.invoke("quota.auth.logout", { vendor: "openai-codex" });
+  await a.invoke("quota.auth.logout", { accountId: "saved-openai-codex" });
   assert.equal((await a.invoke("quota.snapshot", {})).accounts.length, 0);
 });
 
-test("manual tokens work with autoDetect off and take priority over plugin tokens", async () => {
+test("manual tokens and plugin accounts are displayed independently with autoDetect off", async () => {
   const a = app({ autoDetect: false, credentials: { "openai-codex": { token: "manual", accountId: "manual-acct" }, openrouter: "or-key" } },
     { "openai-codex": { token: "plugin" } }, () => reply({}));
   const result = await a.invoke("quota.refresh", {});
-  assert.equal(result.accounts.length, 2);
-  const req = a.requests.find((r) => r.url.includes("chatgpt.com"));
+  assert.equal(result.accounts.length, 3);
+  const req = a.requests.find((r) => r.headers.authorization === "Bearer manual");
   assert.equal(req.headers.authorization, "Bearer manual");
   assert.equal(req.headers["chatgpt-account-id"], "manual-acct");
   assert.equal(a.cliReads, 0);
@@ -90,7 +100,7 @@ test("logout invalidates an in-flight snapshot instead of caching the previous a
   const a = app({ autoDetect: false }, { anthropic: { token: "old" } }, () => pending);
   const snapshot = a.invoke("quota.refresh", {});
   await new Promise((r) => setImmediate(r));
-  await a.invoke("quota.auth.logout", { vendor: "anthropic" });
+  await a.invoke("quota.auth.logout", { accountId: "saved-anthropic" });
   resolve(reply({ five_hour: { utilization: 10 } }));
   assert.equal((await snapshot).code, "AUTH_CHANGED");
   assert.equal((await a.invoke("quota.snapshot", {})).accounts.length, 0);
@@ -103,4 +113,36 @@ test("generic mapped windows accept second-based periods without window_minutes"
   assert.equal(result.accounts[0].status, "ok");
   assert.equal(result.accounts[0].windows[0].windowMinutes, 300);
   assert.equal(result.accounts[0].windows[0].remainingPercent, 80);
+});
+
+test("multiple ChatGPT accounts keep headers isolated; exhausted/error accounts are not recommended", async () => {
+  const records = ["a", "b", "c"].map((id) => ({ id, vendor: "openai-codex", label: `Account ${id}`,
+    credential: { token: `private-${id}`, accountId: `upstream-${id}`, source: "plugin" } }));
+  const a = app({ autoDetect: false }, records, (req) => {
+    const id = req.headers.authorization.slice(-1);
+    assert.equal(req.headers["chatgpt-account-id"], `upstream-${id}`);
+    if (id === "c") return reply({}, 401);
+    return reply({ rate_limit: { primary_window: { used_percent: id === "a" ? 100 : 20, limit_window_seconds: 18000 } } });
+  });
+  const result = await a.invoke("quota.refresh", {});
+  assert.deepEqual(Array.from(result.accounts, (r) => r.id), ["plugin:a", "plugin:b", "plugin:c"]);
+  assert.deepEqual(Array.from(result.accounts, (r) => r.availability), ["exhausted", "available", "unknown"]);
+  assert.deepEqual(Array.from(result.accounts, (r) => r.recommended), [false, true, false]);
+  assert.ok(!JSON.stringify(result).includes("private-"));
+  assert.ok(!JSON.stringify(result).includes("upstream-"));
+  await a.invoke("quota.auth.logout", { accountId: "a" });
+  assert.deepEqual(Array.from((await a.invoke("quota.snapshot", {})).accounts, (r) => r.id), ["plugin:b", "plugin:c"]);
+});
+
+test("priority changes and labels invalidate snapshot cache and change the recommendation", async () => {
+  const a = app({ autoDetect: false }, ["a", "b"].map((id) => ({ id, vendor: "anthropic", label: id,
+    credential: { token: id, source: "plugin" } })), () => reply({ five_hour: { utilization: 10 } }));
+  assert.equal((await a.invoke("quota.snapshot", {})).accounts.find((r) => r.recommended).id, "plugin:a");
+  await a.invoke("quota.auth.move", { accountId: "b", direction: "up" });
+  await a.invoke("quota.auth.rename", { accountId: "b", label: "备用账号" });
+  const snapshot = await a.invoke("quota.snapshot", {});
+  assert.equal(snapshot.accounts[0].id, "plugin:b");
+  assert.equal(snapshot.accounts[0].accountLabel, "备用账号");
+  assert.equal(snapshot.accounts[0].priority, 1);
+  assert.equal(snapshot.accounts[0].recommended, true);
 });

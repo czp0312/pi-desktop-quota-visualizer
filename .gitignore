@@ -9,3 +9,6 @@ Thumbs.db
 *.log
 .idea/
 .vscode/
+
+# 本地能力配置：项目级 MCP 服务器含发布令牌，绝不提交
+.agents/servers/

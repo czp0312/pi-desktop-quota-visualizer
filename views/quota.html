@@ -90,27 +90,14 @@
       /* ── 头部 ─────────────────────────────────────────────────────────── */
 
       .qp-head {
-        position: sticky;
-        top: var(--pi-plugin-titlebar-height, 0px);
-        z-index: 5;
+        position: relative;
         display: flex;
         align-items: flex-start;
         gap: 10px;
         padding: 4px 2px 10px;
-        /* 头部实心遮住滚过来的内容，下方用伪元素做一段渐隐，避免文字透出。 */
         background: var(--q-bg);
         border-bottom: 1px solid transparent;
-        -webkit-app-region: drag;
-      }
-      .qp-head::after {
-        content: "";
-        position: absolute;
-        left: 0;
-        right: 0;
-        top: 100%;
-        height: 10px;
-        background: linear-gradient(var(--q-bg), transparent);
-        pointer-events: none;
+        -webkit-app-region: no-drag;
       }
       .qp-head button,
       .qp-head a,
@@ -303,6 +290,7 @@
         gap: 6px;
         margin-top: 2px;
       }
+      .qp-card-meta { flex-wrap: wrap; }
       .qp-chip {
         display: inline-block;
         padding: 1px 6px;
@@ -523,6 +511,14 @@
       .qa-panel .qp-btn { height: auto; min-height: 32px; padding: 6px 10px; white-space: normal; }
       .qa-panel .qa-error { color: var(--q-bad); }
       .qa-code { font: 600 18px var(--q-mono); user-select: all; }
+      .qa-group { display: flex; flex-direction: column; margin-top: 14px; border-top: 1px solid var(--q-border-strong); }
+      .qa-group h3 { margin: 10px 0; font-size: 13px; }
+      .qa-editor, .qa-confirm { flex-basis: 100%; min-width: 0; }
+      .qa-editor label, .qa-add label { margin-top: 4px; }
+      .qa-add { margin-bottom: 10px; }
+      .qp-rename { padding: 0 14px 12px; }
+      .qp-rename .qa-input { box-sizing: border-box; margin-top: 6px; }
+      .qp-rename-message { margin-left: 8px; font-size: 12px; color: var(--q-secondary); }
       @media (max-width: 440px) {
         .qp-head { flex-wrap: wrap; }
         .qp-head-actions { flex-wrap: wrap; }
@@ -554,11 +550,8 @@
         <p id="auth-logout-help"></p>
         <p id="auth-other-help"></p>
         <p id="auth-disabled" role="status" hidden></p>
-        <div id="auth-accounts">
-          <div class="qa-row" data-vendor="openai-codex"><strong class="qa-name">ChatGPT</strong><span class="qa-connected"></span><button class="qp-btn" type="button" data-auth="start"></button><button class="qp-btn" type="button" data-auth="logout"></button></div>
-          <div class="qa-row" data-vendor="anthropic"><strong class="qa-name">Claude</strong><span class="qa-connected"></span><button class="qp-btn" type="button" data-auth="start"></button><button class="qp-btn" type="button" data-auth="logout"></button></div>
-          <div class="qa-row" data-vendor="github-copilot"><strong class="qa-name">GitHub Copilot</strong><span class="qa-connected"></span><button class="qp-btn" type="button" data-auth="start"></button><button class="qp-btn" type="button" data-auth="logout"></button></div>
-        </div>
+        <p id="auth-add-help"></p>
+        <div id="auth-accounts"></div>
         <div class="qa-actions"><button class="qp-btn" id="auth-check" type="button"></button></div>
         <p id="auth-status" role="status" aria-live="polite" aria-atomic="true"></p>
         <p class="qa-error" id="auth-error" role="alert" hidden></p>
@@ -584,6 +577,7 @@
       <div id="foot" class="qp-foot"></div>
     </main>
 
+    <script src="notes.js"></script>
     <script>
       (function () {
         "use strict";
@@ -614,6 +608,9 @@
             resetHours: (h, m) => `${h} 小时${m ? ` ${m} 分` : ""}后重置`,
             resetDays: (d, h) => `${d} 天${h ? ` ${h} 小时` : ""}后重置`,
             lowestRemaining: (p) => `剩余最少 ${p}%`,
+            priority: (n) => `优先级 ${n}`,
+            recommended: "推荐（上次额度）", exhausted: "已耗尽", availabilityUnknown: "额度未知",
+            recommendationHelp: "推荐仅基于上次读取的额度和插件账号优先级，供手动切换参考，不会自动路由或切换对话。所有窗口剩余均大于 0 且重置未过时才可推荐；任一窗口为 0 视为耗尽，缺失或过时则未知。这不是模型级精确判断。CLI / 手工来源不参与排序或推荐。",
             barTitle: (r, u) => `剩余 ${r}% · 已用 ${u}%`,
             labels: {
               "window.session": "5 小时额度",
@@ -656,6 +653,9 @@
             resetHours: (h, m) => `Resets in ${h}h${m ? ` ${m}m` : ""}`,
             resetDays: (d, h) => `Resets in ${d}d${h ? ` ${h}h` : ""}`,
             lowestRemaining: (p) => `lowest ${p}% remaining`,
+            priority: (n) => `Priority ${n}`,
+            recommended: "Recommended (last quota)", exhausted: "Exhausted", availabilityUnknown: "Quota unknown",
+            recommendationHelp: "Recommendations use the last quota reading and plugin account priority, for manual switching only. They never automatically route or switch conversations. All windows must have remaining quota above 0 and current resets; any zero means exhausted, missing or stale data means unknown. This is not a model-level guarantee. CLI / manual sources are not ranked or recommended.",
             barTitle: (r, u) => `${r}% remaining · ${u}% used`,
             labels: {
               "window.session": "5-hour limit",
@@ -700,11 +700,15 @@
             title: "管理账号", close: "关闭", check: "刷新授权状态",
             intro: "这是插件独立登录，无需安装 CLI，也不复用宿主登录。需要再次授权一次，不会修改宿主账号。",
             callback: "浏览器回调由 127.0.0.1 本机接收。若自动回调失败，可粘贴最终跳转的完整 localhost URL（必须包含 state）。",
-            logoutHelp: "退出仅清除本插件凭据，不退出宿主或 CLI，也不删除手动令牌；CLI 等来源的账号可能继续显示。",
+            logoutHelp: "删除仅清除本插件中此账号的授权，不退出或修改宿主 / CLI，也不删除手动令牌；其他来源的账号可能继续显示。",
             other: "OpenRouter：仍需在插件设置中手动填写 API Key。Kimi / Meta / Radius / xAI：仍需配置自定义来源，此处不提供 OAuth 登录。",
             blocked: "离线预览和演示模式不支持真实授权。请在 PI-Desktop 中退出演示后使用。",
             loading: "正在读取插件授权状态…", unknown: "授权状态未知", ready: "可选择账号独立授权；同一时间只能进行一个登录。",
-            connected: "插件已授权", disconnected: "插件未授权", start: "登录", again: "重新授权", logout: "退出插件授权",
+            connected: "插件已授权", disconnected: "插件未授权", add: "添加账号", again: "重新授权", logout: "删除本插件授权",
+            addHelp: "每个服务最多 10 个插件账号。新增授权时必须在浏览器切换到目标账号：当前浏览器会话可能仍是旧账号。重复授权不会带来新额度，请勿将重复授权当成新额度。仅插件 OAuth 账号可排序，不修改宿主。",
+            label: "账号备注（可选）", rename: "保存备注", up: "上移", down: "下移",
+            count: (n) => `${n} / 10 个账号`, confirm: "确认删除", keep: "取消删除",
+            deleteConfirm: (name) => `删除「${name}」的本插件授权？仅清除此插件凭据，不影响宿主、CLI 或手动令牌。`,
             open: "重新打开登录浏览器", cancel: "取消登录", submit: "提交回调 URL",
             input: "最终跳转的完整回调 URL", invalid: "请粘贴包含 state 的完整 http://localhost 回调 URL。",
             browser: "已尝试打开浏览器，请完成授权。无法自动返回时，可在下方粘贴最终跳转 URL。",
@@ -716,11 +720,15 @@
             title: "Manage accounts", close: "Close", check: "Refresh authorization status",
             intro: "This is an independent plugin sign-in: no CLI required, and no host login is reused. Authorize once again; your host account is not changed.",
             callback: "Browser callbacks are received locally at 127.0.0.1. If the automatic callback fails, paste the complete final localhost redirect URL (including state).",
-            logoutHelp: "Sign-out removes only this plugin's credentials, not host or CLI sessions or manual tokens. Accounts from CLI and other sources may still appear.",
+            logoutHelp: "Deletion removes only this account's plugin authorization, not host / CLI sessions or manual tokens. Accounts from other sources may still appear.",
             other: "OpenRouter still requires a manual API Key in plugin settings. Kimi / Meta / Radius / xAI still require custom sources; OAuth is not offered here.",
             blocked: "Real authorization is disabled in offline preview and demo mode. Open in PI-Desktop and exit demo to continue.",
             loading: "Reading plugin authorization status…", unknown: "Authorization status unknown", ready: "Choose an account to authorize independently. Only one sign-in can run at a time.",
-            connected: "Plugin authorized", disconnected: "Plugin not authorized", start: "Sign in", again: "Authorize again", logout: "Sign out of plugin",
+            connected: "Plugin authorized", disconnected: "Plugin not authorized", add: "Add account", again: "Authorize again", logout: "Delete plugin authorization",
+            addHelp: "Up to 10 plugin accounts per vendor. When adding, you must switch to the target account in the browser: the current session may still use the old account. Repeated authorization does not create new quota; do not count it as extra quota. Only plugin OAuth accounts can be ranked; the host is unchanged.",
+            label: "Account note (optional)", rename: "Save note", up: "Move up", down: "Move down",
+            count: (n) => `${n} / 10 accounts`, confirm: "Confirm deletion", keep: "Cancel deletion",
+            deleteConfirm: (name) => `Delete plugin authorization for “${name}”? Only this plugin's credentials are removed; host, CLI and manual tokens are unaffected.`,
             open: "Reopen sign-in browser", cancel: "Cancel sign-in", submit: "Submit callback URL",
             input: "Complete final callback URL", invalid: "Paste a complete http://localhost callback URL including state.",
             browser: "The browser has been opened if possible. Complete authorization, or paste the final redirect URL below if the callback fails.",
@@ -768,6 +776,79 @@
           void load({ force: true });
         }
 
+        const authRows = new Map();
+        const authGroups = new Map();
+        const AUTH_VENDORS = [["openai-codex", "OpenAI (ChatGPT Plus/Pro)"], ["anthropic", "Anthropic (Claude Pro/Max)"], ["github-copilot", "GitHub Copilot"]];
+        function makeButton(action, text) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "qp-btn";
+          button.dataset.auth = action;
+          button.textContent = text;
+          return button;
+        }
+        function ensureAuthGroup(vendor, name) {
+          if (authGroups.has(vendor)) return authGroups.get(vendor);
+          const group = document.createElement("section");
+          group.className = "qa-group";
+          group.dataset.vendor = vendor;
+          const heading = document.createElement("h3");
+          const add = document.createElement("div");
+          add.className = "qa-add qa-row";
+          const input = document.createElement("input");
+          input.className = "qa-input";
+          input.type = "text";
+          input.maxLength = 80;
+          input.dataset.vendorLabel = vendor;
+          const button = makeButton("start", authCopy().add);
+          button.dataset.vendor = vendor;
+          add.append(input, button);
+          group.append(heading, add);
+          el("auth-accounts").append(group);
+          const view = { group, heading, input, addButton: button, rows: new Map() };
+          authGroups.set(vendor, view);
+          return view;
+        }
+        function renderAuthAccounts(blocked, pending) {
+          const c = authCopy();
+          const accounts = Array.isArray(authData?.accounts) ? authData.accounts : [];
+          for (const [vendor, name] of AUTH_VENDORS) {
+            const group = ensureAuthGroup(vendor, name);
+            const list = accounts.filter((account) => account.vendor === vendor);
+            group.heading.textContent = `${name} · ${c.count(list.length)}`;
+            group.input.placeholder = c.label;
+            group.addButton.textContent = c.add;
+            group.addButton.disabled = blocked || authBusy || !authData || pending || list.length >= 10;
+            const ids = new Set(list.map((account) => account.id));
+            for (const [id, view] of group.rows) if (!ids.has(id)) { view.row.remove(); group.rows.delete(id); authRows.delete(id); }
+            for (const account of list) {
+              let view = group.rows.get(account.id);
+              if (!view) {
+                const row = document.createElement("div"); row.className = "qa-row"; row.dataset.accountId = account.id;
+                const nameNode = document.createElement("strong"); nameNode.className = "qa-name";
+                const status = document.createElement("span"); status.className = "qa-connected";
+                const actions = document.createElement("div"); actions.className = "qa-actions";
+                const start = makeButton("start", c.again), up = makeButton("up", c.up), down = makeButton("down", c.down), del = makeButton("delete", c.logout);
+                const confirm = document.createElement("span"); confirm.className = "qa-confirm"; confirm.hidden = true;
+                const yes = makeButton("logout", c.confirm), no = makeButton("keep", c.keep);
+                confirm.append(document.createTextNode(c.deleteConfirm(account.label)), yes, no);
+                actions.append(start, up, down, del, confirm); row.append(nameNode, status, actions); group.group.append(row);
+                view = { row, name: nameNode, status, buttons: { start, up, down, delete: del, logout: yes, keep: no }, confirm };
+                group.rows.set(account.id, view); authRows.set(account.id, view);
+              }
+              view.name.textContent = `${t().priority(account.priority)} · ${account.label}`;
+              view.status.textContent = account.connected ? c.connected : c.disconnected;
+              view.buttons.start.textContent = c.again; view.buttons.up.textContent = c.up; view.buttons.down.textContent = c.down; view.buttons.delete.textContent = c.logout;
+              view.buttons.up.disabled = blocked || authBusy || pending || account.priority <= 1; view.buttons.down.disabled = blocked || authBusy || pending || account.priority >= list.length;
+              view.buttons.start.disabled = blocked || authBusy || pending; view.buttons.delete.disabled = blocked || authBusy || pending;
+              view.buttons.logout.textContent = c.confirm; view.buttons.keep.textContent = c.keep;
+              view.confirm.firstChild.textContent = c.deleteConfirm(account.label);
+              view.buttons.logout.disabled = blocked || authBusy || pending;
+              view.row.style.order = String(account.priority);
+            }
+          }
+        }
+
         function renderAuth() {
           const c = authCopy();
           const blocked = authBlocked();
@@ -786,6 +867,7 @@
           const labels = {
             "auth-toggle": c.title, "auth-title": c.title, "auth-close": c.close,
             "auth-intro": c.intro, "auth-callback-help": c.callback, "auth-logout-help": c.logoutHelp,
+            "auth-add-help": c.addHelp,
             "auth-other-help": c.other, "auth-disabled": snapshot ? c.blocked : c.loading,
             "auth-check": c.check, "auth-open": c.open, "auth-cancel": c.cancel,
             "auth-submit": c.submit, "auth-input-label": c.input, "auth-code-label": c.code,
@@ -793,20 +875,7 @@
           for (const [id, value] of Object.entries(labels)) authText(id, value);
           el("auth-disabled").hidden = !blocked;
           el("auth-check").disabled = blocked || authBusy;
-          for (const row of el("auth-accounts").querySelectorAll("[data-vendor]")) {
-            const account = authData && authData.accounts.find((item) => item.vendor === row.dataset.vendor);
-            const connected = !!(account && account.connected);
-            row.querySelector(".qa-connected").textContent = !authData ? c.unknown : connected ? c.connected : c.disconnected;
-            const start = row.querySelector('[data-auth="start"]');
-            const logout = row.querySelector('[data-auth="logout"]');
-            start.textContent = connected ? c.again : c.start;
-            logout.textContent = c.logout;
-            const name = row.querySelector(".qa-name").textContent;
-            start.setAttribute("aria-label", `${start.textContent}: ${name}`);
-            logout.setAttribute("aria-label", `${c.logout}: ${name}`);
-            start.disabled = blocked || authBusy || !authData || pending;
-            logout.disabled = blocked || authBusy || !connected || pending;
-          }
+          renderAuthAccounts(blocked, pending);
           authText("auth-status", blocked ? "" : login
             ? `${login.vendor}: ${c.states[login.status] || c.unknown}${login.message ? ` ${login.message}` : ""}`
             : !authReady ? c.loading : authData ? c.ready : c.unknown);
@@ -816,7 +885,7 @@
           if (hideLogin && authVisible && el("auth-login").contains(document.activeElement)) el("auth-title").focus();
           el("auth-login").hidden = hideLogin;
           el("auth-form").hidden = hideLogin || login.method !== "browser";
-          authText("auth-method", !hideLogin ? (login.method === "device" ? c.device : c.browser) : "");
+          authText("auth-method", !hideLogin ? `${login.method === "device" ? c.device : c.browser} ${c.addHelp}` : "");
           authText("auth-url", !hideLogin ? login.url : "");
           authText("auth-code", !hideLogin && login.method === "device" ? login.userCode : "");
           el("auth-code-label").hidden = hideLogin || login.method !== "device" || !login.userCode;
@@ -836,8 +905,8 @@
           authBusy = true;
           stopAuthPoll();
           if (action !== "status") authError = "";
-          renderAuth();
           try {
+            renderAuth();
             const result = await bridgeInvoke(`quota.auth.${action}`, payload);
             if (authDisposed || authBlocked()) return;
             authReady = true;
@@ -847,13 +916,18 @@
             }
             authError = "";
             authData = { accounts: Array.isArray(result.accounts) ? result.accounts : [], login: result.login || null };
+            if (action === "start" && !payload.accountId && result.login?.status === "waiting") {
+              const group = authGroups.get(payload.vendor);
+              if (group) group.input.value = "";
+              el("auth-login").scrollIntoView?.({ block: "nearest" });
+            }
             if (action === "submit") el("auth-input").value = "";
             const login = authData.login;
             if (login && login.status === "success" && !authRefreshed.has(login.id)) {
               authRefreshed.add(login.id);
               authRefreshNeeded = true;
             }
-            if (action === "logout") authRefreshNeeded = true;
+            if (["rename", "move", "logout"].includes(action)) authRefreshNeeded = true;
           } catch {
             // Do not log bridge failures: callback URLs may contain authorization codes.
             authReady = true;
@@ -861,7 +935,7 @@
           } finally {
             authBusy = false;
             if (!authDisposed) {
-              renderAuth();
+              try { renderAuth(); } catch { authText("auth-error", authCopy().failed); el("auth-error").hidden = false; }
               flushAuthRefresh();
               if (authResync) {
                 authResync = false;
@@ -894,8 +968,32 @@
         el("auth-check").addEventListener("click", () => { void authRequest("status"); });
         el("auth-accounts").addEventListener("click", (event) => {
           const button = event.target.closest("[data-auth]");
-          if (!button || button.disabled || authPending() || !authData) return;
-          void authRequest(button.dataset.auth, { vendor: button.closest("[data-vendor]").dataset.vendor });
+          if (!button || button.disabled || authBlocked() || authBusy || authPending() || !authData) return;
+          const row = button.closest("[data-account-id]");
+          const action = button.dataset.auth;
+          if (!row && action === "start") {
+            const group = authGroups.get(button.dataset.vendor);
+            if (!group) return;
+            void authRequest("start", { vendor: button.dataset.vendor, label: group.input.value.trim() || undefined });
+            return;
+          }
+          if (!row) return;
+          const account = authData.accounts.find((item) => item.id === row.dataset.accountId);
+          const view = account && authRows.get(account.id);
+          if (!account || !view) return;
+          if (action === "delete") {
+            view.confirm.hidden = false;
+            view.buttons.logout.focus();
+          } else if (action === "keep") {
+            view.confirm.hidden = true;
+            view.buttons.delete.focus();
+          } else if (action === "logout") {
+            void authRequest("logout", { accountId: account.id });
+          } else if (action === "start") {
+            void authRequest("start", { vendor: account.vendor, accountId: account.id });
+          } else if (action === "up" || action === "down") {
+            void authRequest("move", { accountId: account.id, direction: action });
+          }
         });
         for (const action of ["open", "cancel"]) {
           el(`auth-${action}`).addEventListener("click", () => {
@@ -908,8 +1006,7 @@
           const input = el("auth-input").value.trim();
           try {
             const url = new URL(input);
-            if (url.protocol !== "http:" || url.hostname !== "localhost"
-              || url.username || url.password || !url.searchParams.get("state")) throw new Error("invalid");
+            if (url.protocol !== "http:" || url.hostname !== "localhost" || url.username || url.password || !url.searchParams.get("state")) throw new Error("invalid");
           } catch {
             authError = authCopy().invalid;
             renderAuth();
@@ -923,7 +1020,6 @@
           if (!document.hidden && authVisible) void authRequest("status");
         });
 
-        // ── 格式化 ──────────────────────────────────────────────────────────
         function escapeHtml(value) {
           return String(value == null ? "" : value)
             .replace(/&/g, "&amp;")
@@ -1044,6 +1140,16 @@
             </div>`;
         }
 
+        const notes = window.createQuotaNotes({
+          invoke: bridgeInvoke, getSnapshot: () => snapshot, isBlocked: authBlocked,
+          isEnglish: () => locale === "en", onSaved: () => {
+            for (const a of authData?.accounts || []) {
+              const card = snapshot?.accounts?.find((r) => r.id === `plugin:${a.id}`);
+              if (card) a.label = card.accountLabel;
+            }
+            render();
+          },
+        });
         function renderAccount(account) {
           const c = t();
           const windows = Array.isArray(account.windows) ? account.windows : [];
@@ -1108,6 +1214,7 @@
                 <span class="${dotClass}" aria-hidden="true"></span>
               </div>
               ${body}
+              ${notes.markup(account)}
             </article>`;
         }
 
@@ -1132,6 +1239,10 @@
         }
 
         function render() {
+          notes.sync();
+          const focused = document.activeElement;
+          const noteFocus = focused?.dataset?.noteInput;
+          const selection = noteFocus ? [focused.selectionStart, focused.selectionEnd] : null;
           const c = t();
           el("title").textContent = c.title;
           el("subtitle").textContent = c.subtitle;
@@ -1156,6 +1267,10 @@
               </div>`;
           } else {
             list.innerHTML = accounts.map(renderAccount).join("");
+          }
+          if (noteFocus) {
+            const input = [...list.querySelectorAll("[data-note-input]")].find((n) => n.dataset.noteInput === noteFocus);
+            if (input && !input.disabled) { input.focus({ preventScroll: true }); input.setSelectionRange(...selection); }
           }
 
           const foot = el("foot");
