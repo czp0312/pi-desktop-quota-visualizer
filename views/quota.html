@@ -612,6 +612,7 @@
             recommended: "推荐（上次额度）", exhausted: "已耗尽", availabilityUnknown: "额度未知",
             recommendationHelp: "推荐仅基于上次读取的额度和插件账号优先级，供手动切换参考，不会自动路由或切换对话。所有窗口剩余均大于 0 且重置未过时才可推荐；任一窗口为 0 视为耗尽，缺失或过时则未知。这不是模型级精确判断。CLI / 手工来源不参与排序或推荐。",
             barTitle: (r, u) => `剩余 ${r}% · 已用 ${u}%`,
+            groupUsed: (p) => `最高已用 ${p}%`,
             labels: {
               "window.session": "5 小时额度",
               "window.day": "日额度",
@@ -622,6 +623,12 @@
               "window.month": "月额度",
               "window.credit": "额度余额",
               "window.other": "额度窗口",
+              "window.antigravity.gemini": "Gemini",
+              "window.antigravity.other": "其他",
+              "window.antigravity.gemini.session": "Gemini · 5 小时",
+              "window.antigravity.gemini.week": "Gemini · 7 天",
+              "window.antigravity.other.session": "其他 · 5 小时",
+              "window.antigravity.other.week": "其他 · 7 天",
             },
             span: (m) => `每 ${m}`,
             standalone:
@@ -657,6 +664,7 @@
             recommended: "Recommended (last quota)", exhausted: "Exhausted", availabilityUnknown: "Quota unknown",
             recommendationHelp: "Recommendations use the last quota reading and plugin account priority, for manual switching only. They never automatically route or switch conversations. All windows must have remaining quota above 0 and current resets; any zero means exhausted, missing or stale data means unknown. This is not a model-level guarantee. CLI / manual sources are not ranked or recommended.",
             barTitle: (r, u) => `${r}% remaining · ${u}% used`,
+            groupUsed: (p) => `highest ${p}% used`,
             labels: {
               "window.session": "5-hour limit",
               "window.day": "Daily limit",
@@ -667,6 +675,12 @@
               "window.month": "Monthly limit",
               "window.credit": "Credit balance",
               "window.other": "Quota window",
+              "window.antigravity.gemini": "Gemini",
+              "window.antigravity.other": "Other",
+              "window.antigravity.gemini.session": "Gemini · 5-hour",
+              "window.antigravity.gemini.week": "Gemini · 7-day",
+              "window.antigravity.other.session": "Other · 5-hour",
+              "window.antigravity.other.week": "Other · 7-day",
             },
             span: (m) => `every ${m}`,
             standalone:
@@ -778,7 +792,7 @@
 
         const authRows = new Map();
         const authGroups = new Map();
-        const AUTH_VENDORS = [["openai-codex", "OpenAI (ChatGPT Plus/Pro)"], ["anthropic", "Anthropic (Claude Pro/Max)"], ["github-copilot", "GitHub Copilot"]];
+        const AUTH_VENDORS = [["openai-codex", "OpenAI (ChatGPT Plus/Pro)"], ["anthropic", "Anthropic (Claude Pro/Max)"], ["github-copilot", "GitHub Copilot"], ["google-antigravity", "Google Antigravity"]];
         function makeButton(action, text) {
           const button = document.createElement("button");
           button.type = "button";
@@ -1087,6 +1101,7 @@
         // ── 渲染 ────────────────────────────────────────────────────────────
         function renderWindow(win) {
           const c = t();
+          const grouped = Array.isArray(win.members) && win.members.length > 0;
           const used = Math.max(0, Math.min(100, Number(win.usedPercent) || 0));
           const remaining = Math.max(
             0,
@@ -1102,7 +1117,7 @@
           const counts =
             win.used != null && win.limit != null
               ? `${win.used}${win.unit ? " " + win.unit : ""} / ${win.limit}${win.unit ? " " + win.unit : ""}`
-              : c.usedLabel(usedText);
+              : grouped ? c.groupUsed(usedText) : c.usedLabel(usedText);
 
           return `
             <div class="qp-window">
@@ -1172,6 +1187,11 @@
             body = `<div class="qp-note"><span>${escapeHtml(
               account.hint || c.noWindows,
             )}</span></div>`;
+          }
+          if (account.provider === "google-antigravity" && account.quotaSource === "model-fallback" && windows.length) {
+            body += `<div class="qp-note"><span>${escapeHtml(locale === "en"
+              ? "Period summary unavailable; showing unclassified quota summaries, not 5-hour or 7-day quotas."
+              : "周期汇总未返回可用窗口；当前为未分类额度汇总，不代表 5 小时或 7 天额度。")}</span></div>`;
           }
 
           const dotClass =

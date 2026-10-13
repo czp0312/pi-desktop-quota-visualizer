@@ -241,3 +241,72 @@ test("timeout while saving rolls back the uncompleted authorization", async (t) 
   await submitted;
   assert.deepEqual(f.saved, { version: 2, accounts: [] });
 });
+
+test("Antigravity Google PKCE login uses offline consent, public client configuration and stores email", async (t) => {
+  const { GOOGLE_ANTIGRAVITY: p } = require("../lib/antigravity");
+  const f = fixture(t, {}, (req) => req.method === "GET" ? response({ email: "google@example.com" }) : response(token("google-private-access")));
+  const { login } = await f.auth.start("google-antigravity");
+  const url = new URL(login.url);
+  assert.equal(url.origin + url.pathname, p.authorize);
+  assert.equal(url.searchParams.get("redirect_uri"), "http://localhost:51121/oauth-callback");
+  assert.equal(url.searchParams.get("access_type"), "offline");
+  assert.match(url.searchParams.get("prompt"), /consent/);
+  assert.match(url.searchParams.get("prompt"), /select_account/);
+  assert.equal(url.searchParams.get("scope"), p.scope);
+  assert.equal(url.searchParams.has("originator"), false);
+  await assert.rejects(f.auth.submit(login.id, redirect(login).replace("51121", "1455")), { code: "INVALID_ARGUMENT" });
+  const result = await f.auth.submit(login.id, redirect(login));
+  assert.equal(result.login.status, "success");
+  const body = new URLSearchParams(f.requests[0].body);
+  assert.equal(f.requests[0].url, p.token);
+  assert.equal(body.get("client_secret"), p.clientSecret);
+  assert.equal(crypto.createHash("sha256").update(body.get("code_verifier")).digest("base64url"), url.searchParams.get("code_challenge"));
+  assert.equal((await f.auth.credential(login.accountId)).email, "google@example.com");
+  for (const value of ["google-private-access", "test-refresh", body.get("code_verifier"), p.clientSecret]) assert.ok(!JSON.stringify(result).includes(value));
+});
+
+test("Antigravity refresh is deduplicated and preserves email and refresh token when not rotated", async (t) => {
+  const f = fixture(t, { "google-antigravity": { access: "old", refresh: "google-private-refresh", expires: 0, email: "google@example.com" } },
+    () => response({ access_token: "new", expires_in: 3600 }));
+  const results = await Promise.all([f.auth.credential("legacy-google-antigravity"), f.auth.credential("legacy-google-antigravity")]);
+  assert.equal(f.requests.length, 1);
+  const body = new URLSearchParams(f.requests[0].body);
+  assert.equal(body.get("grant_type"), "refresh_token");
+  assert.ok(body.get("client_secret"));
+  assert.equal(body.get("refresh_token"), "google-private-refresh");
+  assert.equal(results[0].email, "google@example.com");
+  assert.equal(f.saved.accounts[0].credential.refresh, "google-private-refresh");
+  assert.equal(results[1].token, "new");
+});
+
+test("Antigravity identity failure does not block login; cancellation during lookup never saves", async (t) => {
+  const f = fixture(t, {}, (req) => req.method === "GET" ? response({ error: "google-private-access" }, 403) : response(token("google-private-access")));
+  const { login } = await f.auth.start("google-antigravity");
+  assert.equal((await f.auth.submit(login.id, redirect(login))).login.status, "success");
+  assert.equal((await f.auth.credential(login.accountId)).email, undefined);
+  const gate = deferred();
+  const g = fixture(t, {}, (req) => req.method === "GET" ? gate.promise : response(token()));
+  const next = (await g.auth.start("google-antigravity")).login;
+  const submitted = g.auth.submit(next.id, redirect(next));
+  await flush();
+  await g.auth.cancel(next.id);
+  gate.resolve(response({ email: "late@example.com" }));
+  assert.equal((await submitted).login.status, "cancelled");
+  assert.deepEqual(g.saved.accounts, []);
+});
+
+test("Antigravity multi-account limit and logout keep other vendors and sibling accounts intact", async (t) => {
+  const f = fixture(t);
+  let first;
+  for (let i = 0; i < 10; i++) {
+    const { login } = await f.auth.start("google-antigravity");
+    assert.equal((await f.auth.submit(login.id, redirect(login))).login.status, "success");
+    first ??= login.accountId;
+  }
+  await assert.rejects(f.auth.start("google-antigravity"), { code: "INVALID_ARGUMENT" });
+  const { login } = await f.auth.start("openai-codex");
+  await f.auth.submit(login.id, redirect(login));
+  await f.auth.logout(first);
+  assert.equal((await f.auth.listAccounts()).length, 10);
+  assert.ok(await f.auth.credential(login.accountId));
+});

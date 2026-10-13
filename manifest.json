@@ -2,25 +2,25 @@
   "schemaVersion": 1,
   "id": "io.github.czp0312.subscription-quota",
   "name": "订阅额度",
-  "version": "0.4.2",
-  "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
+  "version": "0.7.1",
+  "description": "在工作面板中可视化 Anthropic、OpenAI、GitHub Copilot、Google Antigravity、OpenRouter 等订阅账号的剩余额度，显示周期额度与重置倒计时。Antigravity 按 Gemini / 其他两组汇总。绿色进度条表示剩余，只显示已授权账号。",
   "author": "czp0312",
   "repository": "https://github.com/czp0312/pi-desktop-quota-visualizer",
   "homepage": "https://github.com/czp0312/pi-desktop-quota-visualizer#readme",
   "license": "MIT",
   "categories": ["productivity"],
-  "changelog": "Release 0.4.2：移除账号备注——账号名改由检测到的身份决定：ChatGPT 用 profile claim 的 name（昵称）作标题、email 显示为卡片 chip；Claude 读 /api/oauth/profile 的 email；Copilot 读额度接口返回的登录名；都拿不到则只显示厂商名。登录与刷新时记录账号 email，取不到不写该字段，旧凭据形状不变。",
-  "safetyNotes": "插件 OAuth 多账号与手工令牌分别显示，CLI 自动发现仅作回退。优先级和额度推荐仅供手动切换，不控制宿主对话。不复用或读取 PI-Desktop 密钥库。OAuth 令牌由 Node fs 加密保存到本插件 getDataPath 目录（quota-oauth.enc）；本地密钥 quota-oauth.key 同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间 Node HTTP 仅监听 127.0.0.1:1455/53692，超时或结束关闭。令牌不写日志、不返回界面；联网走 net.fetch 白名单，shell.openExternal 仅打开服务商授权页。账号邮箱/用户名来自本地解析 OAuth 令牌、同源服务商接口（Claude /api/oauth/profile）与额度响应，不新增联网域名、不写日志。删除只清选中插件账号，不退出宿主/CLI，也不撤销服务商授权。",
+  "changelog": "Release 0.7.1：移除额度诊断、复制入口及诊断缓存通道；移除模型读数折叠明细。保留 Gemini / 其他额度汇总、服务端实际返回的周期窗口、重置倒计时、模型查询回退与账号推荐。现有账号授权保留，无新增权限或域名。",
+  "safetyNotes": "插件 OAuth 多账号与手工令牌分别显示，CLI 自动发现仅作回退。推荐仅供手动切换，不控制宿主对话。不读取 PI-Desktop 或 Antigravity 编辑器密钥库。OAuth 令牌由 Node fs 加密保存到本插件 getDataPath 目录（quota-oauth.enc），本地密钥 quota-oauth.key 同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间 HTTP 仅监听 127.0.0.1:1455/53692/51121，超时或结束关闭。令牌不写日志、不返回界面；联网走 net.fetch 白名单，shell.openExternal 仅打开服务商授权页。Antigravity 使用 Google 公共桌面客户端及其既有 cloud-platform/userinfo/cclog/experimentsandconfigs 授权范围；仅查询身份、项目与额度，不调用生成或项目创建接口。账号身份来自 OAuth 令牌及服务商接口。删除只清选中插件账号，不退出宿主/CLI/编辑器，也不撤销服务商授权。",
   "i18n": {
     "en": {
       "name": "Subscription Quotas",
-      "description": "Visualize the remaining quota of your subscription accounts in the work panel — Anthropic (Claude Pro/Max), OpenAI (ChatGPT Plus/Pro), GitHub Copilot, OpenRouter and more — as 5-hour / weekly / monthly / credit windows with remaining percentage, reset countdown and a progress bar (green = remaining, grey = used). Only accounts signed in on this machine are shown.",
-      "safetyNotes": "Plugin OAuth accounts and manual tokens are displayed separately; optional CLI credentials are a fallback. Priorities and quota recommendations are advisory only and never switch host chat accounts. Never reads PI-Desktop's secret store. OAuth tokens are encrypted via Node fs in this plugin's getDataPath directory (quota-oauth.enc); quota-oauth.key is stored alongside it, so protection relies on OS file permissions, not an OS keychain. During browser login Node HTTP listens only on 127.0.0.1:1455/53692 and closes on completion or timeout. Tokens are never logged or returned to the panel. Requests use net.fetch's allowlist; shell.openExternal opens vendor authorization pages. Account emails/usernames come from locally parsed OAuth tokens, same-origin vendor endpoints (Claude /api/oauth/profile) and quota responses, with no new network domains and no logging. Removal deletes only the selected plugin account, not host/CLI logins or vendor grants."
+      "description": "Visualize remaining subscription quotas for Anthropic, OpenAI, GitHub Copilot, Google Antigravity, OpenRouter and more, with reset countdowns and green remaining bars. Antigravity shows Gemini / Other group summaries. Only authorized accounts are shown.",
+      "safetyNotes": "Plugin OAuth accounts and manual tokens are separate; optional CLI discovery is a fallback. Recommendations never switch host chat accounts. Never reads PI-Desktop's or Antigravity's secret store. Tokens are encrypted via Node fs in the plugin data directory; the local key is stored alongside ciphertext, relying on OS permissions, not an OS keychain. Login listens only on 127.0.0.1:1455/53692/51121 until completion or timeout. Tokens are never logged or returned to the panel. Network requests use the domain allowlist. Antigravity uses the public installed-app Google OAuth client and its existing cloud-platform/userinfo/cclog/experimentsandconfigs scopes; only identity, project and quota endpoints are queried, with no generation or project creation calls. Removal deletes only plugin credentials, not host/CLI/IDE sessions or vendor grants."
     },
     "zh-CN": {
       "name": "订阅额度",
-      "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
-      "safetyNotes": "插件 OAuth 多账号与手工令牌分别显示，CLI 凭据仅作回退。优先级和推荐仅供手动切换，不改变宿主对话账号。不读取 PI-Desktop 密钥库。OAuth 令牌在本插件数据目录加密保存，本地密钥同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间仅监听 127.0.0.1:1455/53692，结束或超时关闭。令牌不写日志、不返回界面；联网受域名白名单约束。删除只清选中插件账号，不影响宿主/CLI 或服务商授权。"
+      "description": "可视化订阅账号剩余额度、绿色进度条与重置倒计时。Antigravity 按 Gemini / 其他两组汇总。只显示已授权账号。",
+      "safetyNotes": "插件 OAuth 多账号与手工令牌分别显示；CLI 凭据仅作回退。推荐仅供手动切换，不改变宿主账号。不读取宿主或 Antigravity 编辑器密钥库。OAuth 令牌在本插件数据目录加密保存，本地密钥同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间仅监听 127.0.0.1:1455/53692/51121，结束或超时关闭。令牌不写日志、不返回界面；联网受域名白名单约束。Antigravity 沿用公共桌面客户端的 Google 授权范围，仅查询身份、项目与额度，不调用生成或创建项目接口。删除只清选中插件账号，不影响宿主/CLI/编辑器或服务商授权。"
     }
   },
   "main": "main.js",
@@ -59,7 +59,8 @@
           "claude",
           "chatgpt",
           "copilot",
-          "openrouter"
+          "openrouter",
+          "antigravity"
         ],
         "category": "Subscription"
       }
@@ -89,7 +90,7 @@
       {
         "key": "credentials",
         "title": "手工令牌（JSON 对象）",
-        "description": "厂商 id → 令牌。例如 {\"openrouter\":\"sk-or-...\",\"anthropic\":\"...\",\"openai-codex\":\"...\",\"github-copilot\":\"...\",\"kimi-coding\":\"...\",\"meta\":\"...\",\"radius\":\"...\",\"xai\":\"...\"}。填了才算已登录。",
+        "description": "厂商 id → 令牌。例如 {\"openrouter\":\"sk-or-...\",\"anthropic\":\"...\",\"openai-codex\":\"...\",\"github-copilot\":\"...\",\"google-antigravity\":\"Google OAuth access token\",\"kimi-coding\":\"...\",\"meta\":\"...\",\"radius\":\"...\",\"xai\":\"...\"}。填了才算已登录；Antigravity 不接受 Gemini API Key。",
         "type": "json",
         "default": {}
       },
@@ -122,7 +123,13 @@
       "api.kimi.com",
       "api.meta.ai",
       "radius.pi.dev",
-      "api.x.ai"
+      "api.x.ai",
+      "accounts.google.com",
+      "oauth2.googleapis.com",
+      "www.googleapis.com",
+      "cloudcode-pa.googleapis.com",
+      "daily-cloudcode-pa.googleapis.com",
+      "daily-cloudcode-pa.sandbox.googleapis.com"
     ]
   },
   "engines": {

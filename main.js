@@ -17,13 +17,13 @@
  * ── 凭据来源 ────────────────────────────────────────────────────────────────
  * 插件 OAuth 多账号与手工令牌分别展示；CLI 仅在无前两者时作为可关闭的回退。
  * 宿主没有供插件复用订阅登录的 API；不读取或解密宿主 SecretStore。
- * ChatGPT / Claude / Copilot 可在面板「管理账号」单独授权，无需安装 CLI。
+ * ChatGPT / Claude / Copilot / Antigravity 可在面板「管理账号」单独授权，无需安装 CLI。
  * 插件凭据仅保存在自己的数据目录中，界面仅接收非敏感登录状态。
  *
  * ── 服务商注册表 ────────────────────────────────────────────────────────────
  * id 与 PI-Desktop 的厂商 id 对齐：anthropic / openai-codex / github-copilot /
- * kimi-coding / meta / openrouter / radius / xai。
- * 其中 anthropic、openai-codex、github-copilot、openrouter 有内置适配器；
+ * google-antigravity / kimi-coding / meta / openrouter / radius / xai。
+ * 其中 anthropic、openai-codex、github-copilot、google-antigravity、openrouter 有内置适配器；
  * 其余四家没有公开的额度接口，走通用适配器（settings.sources 里配置 url + 字段映射），
  * 没配置就不会显示——绝不用猜测的接口地址去显示可能错误的数字。
  *
@@ -37,6 +37,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { createAuth } = require("./lib/oauth");
 const { recommendAccounts } = require("./lib/recommendations");
+const antigravity = require("./lib/antigravity");
+const { SUMMARY_ENDPOINTS, summaryWindows } = require("./lib/antigravity-summary");
 
 /** 上游请求超时；宿主面板通道整体约 30s，留足余量。 */
 const REQUEST_TIMEOUT_MS = 8_000;
@@ -171,7 +173,7 @@ function hasFetch() {
 }
 
 /** 走宿主的 net.fetch（受 manifest.net.domains 约束）。只有额度数字进缓存。 */
-async function httpJson(url, headers) {
+async function httpJson(url, headers, body, timeoutMs = REQUEST_TIMEOUT_MS) {
   if (!hasFetch()) {
     const error = new Error("宿主未提供 net.fetch");
     error.code = "UNSUPPORTED";
@@ -179,7 +181,8 @@ async function httpJson(url, headers) {
   }
   let response;
   try {
-    response = await pi.net.fetch({ url, method: "GET", headers, timeoutMs: REQUEST_TIMEOUT_MS });
+    response = await pi.net.fetch({ url, method: body === undefined ? "GET" : "POST", headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }), timeoutMs });
   } catch {
     throw Object.assign(new Error("额度网络请求失败，请检查网络及插件权限后重试"), { code: "NETWORK" });
   }
@@ -806,7 +809,7 @@ async function collectOpenAiCodex(settings, _vendor, provided) {
   const headers = {
     accept: "application/json",
     authorization: `Bearer ${credential.token}`,
-    "user-agent": "pi-desktop-subscription-quota/0.1.0",
+    "user-agent": "pi-desktop-subscription-quota/0.7.1",
   };
   if (credential.accountId) headers["chatgpt-account-id"] = credential.accountId;
 
@@ -873,6 +876,66 @@ async function collectCopilot(settings, _vendor, provided) {
   };
 }
 
+async function collectAntigravity(settings, _vendor, provided) {
+  const vendor = "google-antigravity";
+  const name = "Google Antigravity";
+  // No host/IDE credential discovery. Plugin OAuth or an explicit manual token only.
+  const credential = provided ?? await resolveCredential(settings, vendor, async () => null);
+  if (!credential) return null;
+  const headers = {
+    accept: "application/json", "content-type": "application/json",
+    authorization: `Bearer ${credential.token}`,
+    "user-agent": "antigravity/2.9.1 pi-desktop-subscription-quota/0.7.1",
+    "x-goog-api-client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
+    "client-metadata": JSON.stringify(antigravity.clientMetadata()),
+  };
+  const request = (step, requestHeaders, body, endpoint = antigravity.ENDPOINT, timeoutMs = REQUEST_TIMEOUT_MS) =>
+    httpJson(`${endpoint}/v1internal:${step}`, requestHeaders, body, timeoutMs);
+  try {
+    const context = await request("loadCodeAssist",
+      { ...headers, "user-agent": "google-api-nodejs-client/9.15.1" }, { metadata: antigravity.metadata() });
+    if (context.status < 200 || context.status >= 300)
+      throw httpError(`${name} · loadCodeAssist${antigravity.errorDetails(context.data)}`, context);
+    const project = antigravity.projectId(context.data);
+    let windows = [], quotaSource = "summary";
+    // 3 × 2s summaries + 4s fallback + 8s discovery + up to 8s refresh < panel's 30s budget.
+    for (let index = 0; index < SUMMARY_ENDPOINTS.length; index++) {
+      let response;
+      try {
+        response = await request("retrieveUserQuotaSummary", headers, project ? { project } : {}, SUMMARY_ENDPOINTS[index], 2000);
+        if (response.status < 200 || response.status >= 300) {
+          if (response.status === 401 || response.status === 403)
+            throw httpError(`${name} · retrieveUserQuotaSummary${antigravity.errorDetails(response.data)}`, response);
+          continue;
+        }
+        windows = summaryWindows(response.data);
+        if (windows.length) break;
+      } catch (error) {
+        if (response && [401, 403].includes(response.status)) throw error;
+      }
+    }
+    if (!windows.length) {
+      quotaSource = "model-fallback";
+      const response = await request("fetchAvailableModels", headers, project ? { project } : {}, antigravity.ENDPOINT, 4000);
+      if (response.status < 200 || response.status >= 300)
+        throw httpError(`${name} · fetchAvailableModels${project ? "" : " · 无项目查询"}${antigravity.errorDetails(response.data)}`, response);
+      windows = antigravity.quotaWindows(response.data);
+    }
+    const identity = credential.email ?? null;
+    const tier = context.data?.currentTier;
+    return {
+      id: vendor, provider: vendor, source: credential.source === "plugin" ? "plugin" : "settings",
+      label: identity ? `${name} · ${identity}` : name, identity, email: identity,
+      plan: typeof tier?.id === "string" ? tier.id : null,
+      status: windows.length ? "ok" : "empty", windows, quotaSource,
+      note: windows.length && quotaSource === "model-fallback" ? "周期汇总接口未返回可用窗口；当前为未分类额度汇总，不代表 5 小时或 7 天额度" : null,
+      hint: windows.length ? null : "周期汇总和模型接口均未返回可识别额度；缺失 5 小时/7 天窗口不占位",
+    };
+  } catch (error) {
+    return errorAccount({ id: vendor, name }, error);
+  }
+}
+
 async function collectOpenRouter(settings) {
   const vendor = "openrouter";
   const name = "OpenRouter";
@@ -915,6 +978,11 @@ const VENDORS = [
     id: "github-copilot",
     name: "GitHub Copilot",
     collect: collectCopilot,
+  },
+  {
+    id: "google-antigravity",
+    name: "Google Antigravity",
+    collect: collectAntigravity,
   },
   {
     id: "kimi-coding",
@@ -1095,7 +1163,7 @@ async function buildSnapshot({ force = false } = {}) {
         return { ...row, id: `plugin:${account.id}`, source: "plugin", priority: account.priority,
           identity: display.identity, email: display.email, vendorName: display.vendorName, label: display.label };
       }));
-      const oauthVendor = ["anthropic", "openai-codex", "github-copilot"].includes(vendor.id);
+      const oauthVendor = ["anthropic", "openai-codex", "github-copilot", "google-antigravity"].includes(vendor.id);
       if (authError && oauthVendor) rows.push({ ...errorAccount(vendor, authError), id: `auth:${vendor.id}` });
       // Explicit manual credentials remain visible; CLI is only a fallback.
       if (!pluginAccounts.length || settingsToken(settings, vendor.id)) {
