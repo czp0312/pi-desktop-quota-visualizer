@@ -22,8 +22,8 @@
  *
  * ── 服务商注册表 ────────────────────────────────────────────────────────────
  * id 与 PI-Desktop 的厂商 id 对齐：anthropic / openai-codex / github-copilot /
- * kimi-coding / meta / openrouter / radius / xai。
- * 其中 anthropic、openai-codex、github-copilot、openrouter 有内置适配器；
+ * kimi-coding / meta / openrouter / radius / xai，另支持 opencode-go。
+ * 其中 anthropic、openai-codex、github-copilot、openrouter、opencode-go 有内置适配器；
  * 其余四家没有公开的额度接口，走通用适配器（settings.sources 里配置 url + 字段映射），
  * 没配置就不会显示——绝不用猜测的接口地址去显示可能错误的数字。
  *
@@ -76,7 +76,7 @@ async function resolveCredential(settings, vendor, cli) {
 const DEFAULT_SETTINGS = {
   autoDetect: true,
   demoMode: false,
-  refreshSeconds: 300,
+  refreshSeconds: 60,
   credentials: {},
   sources: [],
   accounts: [],
@@ -259,6 +259,26 @@ function windowFrom({ period, labelKey, windowMinutes, usedPercent, resetsAt, us
 }
 
 // ── 各家响应 → 窗口列表 ─────────────────────────────────────────────────────
+
+/** OpenCode Go usage: percent is already 0–100 (1 means 1%, not 100%). */
+function openCodeGoWindows(data) {
+  const out = [];
+  for (const [field, period, minutes] of [
+    ["rolling", "session", 300],
+    ["weekly", "week", 10080],
+    ["monthly", "month", undefined],
+  ]) {
+    const entry = data?.usage?.[field];
+    // Missing/null usage must not become a misleading 100% remaining window.
+    if (!entry || typeof entry.percent !== "number" || !Number.isFinite(entry.percent)) continue;
+    const built = windowFrom({
+      period, windowMinutes: minutes, usedPercent: entry.percent, resetsAt: entry.resetsAt,
+    });
+    built.key = `opencode-go-${field}`;
+    out.push(built);
+  }
+  return out;
+}
 
 /** Anthropic（Claude Pro/Max）oauth/usage：five_hour / seven_day* / monthly。 */
 const ANTHROPIC_WINDOW_FIELDS = [
@@ -669,6 +689,18 @@ async function codexCliCredentials() {
   };
 }
 
+/** OpenCode uses XDG data paths on macOS/Linux as well as Windows. */
+async function openCodeGoCliCredentials() {
+  const file = envPath("XDG_DATA_HOME", "opencode", "auth.json")
+    ?? homePath(".local", "share", "opencode", "auth.json");
+  if (!file) return null;
+  const data = await readJsonFile(file);
+  const entry = data?.["opencode-go"];
+  // Do not treat OpenAI/Claude OAuth or Zen PAYG keys as Go subscriptions.
+  const token = entry?.type === "api" && typeof entry.key === "string" ? entry.key.trim() : "";
+  return token ? { token, source: file } : null;
+}
+
 /**
  * GitHub Copilot：编辑器插件留下的 hosts.json / apps.json。
  * 形状是「按主机名或 host:user 索引的对象，值里有 oauth_token」。
@@ -873,6 +905,28 @@ async function collectCopilot(settings, _vendor, provided) {
   };
 }
 
+async function collectOpenCodeGo(settings) {
+  const vendor = "opencode-go";
+  const name = "OpenCode Go";
+  const credential = await resolveCredential(settings, vendor, openCodeGoCliCredentials);
+  if (!credential) return null;
+  const response = await httpJson("https://opencode.ai/zen/go/v1/usage", {
+    accept: "application/json",
+    authorization: `Bearer ${credential.token}`,
+  });
+  if (response.status < 200 || response.status >= 300) throw httpError(name, response);
+  const windows = openCodeGoWindows(response.data);
+  return {
+    id: vendor,
+    provider: vendor,
+    source: credential.source === "settings" ? "settings" : "cli",
+    label: name,
+    status: windows.length ? "ok" : "empty",
+    windows,
+    hint: windows.length ? null : "接口未返回 Go 订阅额度，请确认 API Key 对应有效的 Go 套餐；Zen 按量付费余额不属于订阅额度",
+  };
+}
+
 async function collectOpenRouter(settings) {
   const vendor = "openrouter";
   const name = "OpenRouter";
@@ -915,6 +969,11 @@ const VENDORS = [
     id: "github-copilot",
     name: "GitHub Copilot",
     collect: collectCopilot,
+  },
+  {
+    id: "opencode-go",
+    name: "OpenCode Go",
+    collect: collectOpenCodeGo,
   },
   {
     id: "kimi-coding",
@@ -1126,9 +1185,102 @@ async function buildSnapshot({ force = false } = {}) {
   return snapshot;
 }
 
+// Renderer calls have a 2s budget: return a small cached snapshot immediately.
+let compactRefresh = null;
+let compactError = null;
+let toolbarAccountId = "";
+const compactAccountId = (id) => String(id).length <= 200 ? String(id) : `sha256:${require('node:crypto').createHash('sha256').update(String(id)).digest('hex')}`;
+function startCompactRefresh(force = false) {
+  if (compactRefresh) return;
+  compactError = null;
+  compactRefresh = buildSnapshot({ force }).catch(() => {
+    compactError = "额度刷新失败，请重试";
+  }).finally(() => { compactRefresh = null; });
+}
+function compactSnapshot(force = false) {
+  if (force || !cache || Date.now() - cache.at >= cache.snapshot.refreshSeconds * 1000) startCompactRefresh(true);
+  const result = {
+    ok: true, loading: !!compactRefresh, error: compactError,
+    toolbarAccountId, toolbarLabel: null, toolbarSummary: null,
+    generatedAt: cache?.snapshot.generatedAt ?? null, demo: cache?.snapshot.demo ?? false,
+    accounts: (cache?.snapshot.accounts ?? []).map((account) => ({
+      id: compactAccountId(account.id), label: String(account.label ?? account.provider).slice(0, 100),
+      provider: String(account.provider ?? "").slice(0, 100), status: account.status,
+      error: account.status === "error" ? "额度查询失败，请在完整面板查看" : null,
+      windows: (account.windows ?? []).map((w) => ({
+        key: typeof w.key === "string" ? w.key.slice(0, 80) : null, period: String(w.period ?? "other").slice(0, 20),
+        labelKey: typeof w.labelKey === "string" ? w.labelKey.slice(0, 80) : null,
+        customLabel: typeof w.customLabel === "string" ? w.customLabel.slice(0, 60) : null,
+        remainingPercent: w.remainingPercent, resetsAt: w.resetsAt,
+      })),
+    })),
+  };
+  // Leave headroom for the renderer call envelope (64KB total).
+  result.tightest = null;
+  for (const account of result.accounts) {
+    if (account.id === toolbarAccountId) result.toolbarLabel = account.label;
+    if (account.status !== "ok") continue;
+    for (const window of account.windows) {
+      const value = window.remainingPercent;
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      if (window.resetsAt && (!Number.isFinite(Date.parse(window.resetsAt)) || Date.parse(window.resetsAt) <= Date.now())) continue;
+      if (!result.tightest || value < result.tightest.value) result.tightest = {
+        account: { id: account.id, label: account.label, status: account.status }, window, value,
+      };
+      if (account.id === toolbarAccountId && (!result.toolbarSummary || value < result.toolbarSummary.value)) result.toolbarSummary = {
+        account: { id: account.id, label: account.label, provider: account.provider, status: account.status }, window, value,
+      };
+    }
+  }
+  result.accounts = result.accounts.slice(0, 30);
+  while (Buffer.byteLength(JSON.stringify(result), "utf8") > 56 * 1024 && result.accounts.length) result.accounts.pop();
+  result.truncated = result.accounts.length < (cache?.snapshot.accounts?.length ?? 0);
+  return result;
+}
+async function openQuotaView() {
+  const active = await pi.session.getActive();
+  if (!active) throw new Error("请先打开一个会话，再从右侧工作面板选择订阅额度");
+  return pi.ui.revealView({ viewId: "quota", sessionId: active.sessionId });
+}
+async function onRendererCall(method, args) {
+  if (method === "compact") return compactSnapshot(args?.force === true);
+  if (method === "selectAccount") {
+    const id = args?.accountId;
+    if (typeof id !== "string" || id.length > 200 || (id && !cache?.snapshot.accounts.some((a) => compactAccountId(a.id) === id))) {
+      throw new Error("该账号不可用，请刷新后重试");
+    }
+    try { await pi.plugin.setSettings({ toolbarAccountId: id }); }
+    catch { throw new Error("工具栏显示设置保存失败，请重试"); }
+    toolbarAccountId = id;
+    return compactSnapshot();
+  }
+  if (method === "details") { await openQuotaView(); return { ok: true }; }
+  throw new Error("不支持的额度操作");
+}
+
 // ── 通道路由 ────────────────────────────────────────────────────────────────
 
 const CHANNELS = {
+  "quota.opencode.configure": async (payload) => {
+    const settings = await getSettings();
+    if (settings.demoMode) return { ok: false, code: "DEMO_MODE", message: "请先关闭演示模式再配置 OpenCode Go" };
+    const token = typeof payload.token === "string" ? payload.token.trim() : "";
+    if (payload.remove !== true && (!token || token.length > 8192 || /\s/.test(token))) {
+      return { ok: false, code: "INVALID_KEY", message: "请输入有效的 OpenCode Go API Key" };
+    }
+    const credentials = { ...settings.credentials };
+    if (payload.remove === true) delete credentials["opencode-go"];
+    else credentials["opencode-go"] = token;
+    try {
+      await pi.plugin.setSettings({ credentials });
+    } catch {
+      return { ok: false, code: "SAVE_FAILED", message: "OpenCode Go 设置保存失败，请重试" };
+    }
+    invalidateCache();
+    return { ok: true };
+  },
+  "quota.compact": (payload) => compactSnapshot(payload?.force === true),
+  "quota.details": () => openQuotaView().then(() => ({ ok: true })),
   "quota.auth.status": () => getAuth().status(),
   "quota.auth.start": async (payload) => {
     if ((await getSettings()).demoMode) return { ok: false, code: "DEMO_MODE", message: "请先关闭演示模式再登录" };
@@ -1170,20 +1322,27 @@ async function onPanelInvoke(channel, payload) {
 // ── 生命周期 ────────────────────────────────────────────────────────────────
 
 async function onLoad() {
+  const saved = await pi.plugin.getSettings();
+  // Apply the requested one-minute interval to existing installations once.
+  if (saved?.quotaDisplayVersion !== 7) {
+    try { await pi.plugin.setSettings({ refreshSeconds: 60, quotaDisplayVersion: 7 }); }
+    catch { /* Keep the plugin usable; retry migration on the next load. */ }
+  }
+  toolbarAccountId = typeof saved?.toolbarAccountId === "string" ? saved.toolbarAccountId.slice(0, 200) : "";
   try {
     await pi.commands.register({
       id: "quota.open",
-      title: "Subscription Quotas: Open Panel",
+      title: "订阅额度：打开完整面板",
       keywords: ["quota", "usage", "额度", "剩余"],
       run: async () => {
-        await pi.ui.openPanel({ title: "订阅额度" });
+        await openQuotaView();
       },
     });
   } catch {
     /* 命令注册失败不影响视图渲染 */
   }
   // 预热缓存：不阻塞加载，失败也由界面按需重试。
-  void buildSnapshot({ force: true }).catch(() => {});
+  startCompactRefresh(true);
 }
 
 async function onUnload() {
@@ -1197,4 +1356,4 @@ async function onUnload() {
   }
 }
 
-module.exports = { onLoad, onUnload, onPanelInvoke };
+module.exports = { onLoad, onUnload, onPanelInvoke, onRendererCall };

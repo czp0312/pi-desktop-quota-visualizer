@@ -1,7 +1,7 @@
 # 订阅额度 · Subscription Quotas
 
 > 在 PI-Desktop 右侧工作面板里，一眼看清你的 AI 订阅还剩多少额度。
-> 支持 Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter，
+> 支持 Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenCode Go、OpenRouter，
 > 以及 Kimi Code / Meta / Radius / xAI 的自定义来源。**只显示本机已登录的账号。**
 
 ![界面预览](assets/preview.png)
@@ -23,13 +23,14 @@
 
 ## 支持的服务商
 
-厂商 id 与 PI-Desktop「用订阅登录」列表一致。
+内置服务商使用下列厂商 id；OpenCode Go 使用 `opencode-go`。
 
 | 服务商 | 厂商 id | 凭据来源 | 额度接口 | 窗口 |
 |---|---|---|---|---|
 | Anthropic (Claude Pro/Max) | `anthropic` | 插件内 OAuth / Claude Code / 手工令牌 | `api.anthropic.com/api/oauth/usage` | 5 小时 · 周（全部 / Sonnet / Opus） |
 | OpenAI (ChatGPT Plus/Pro) | `openai-codex` | 插件内 OAuth / Codex CLI / 手工令牌 | `chatgpt.com/backend-api/wham/usage` | 5 小时 · 周 |
 | GitHub Copilot | `github-copilot` | 插件内设备码授权 / 编辑器凭据 / 手工令牌 | `api.github.com/copilot_internal/user` | 月（高级请求 / 聊天 / 补全） |
+| OpenCode Go | `opencode-go` | OpenCode CLI / 手工 API Key | `opencode.ai/zen/go/v1/usage` | 5 小时 · 周 · 月（以接口实际返回为准） |
 | OpenRouter | `openrouter` | 手工令牌 | `openrouter.ai/api/v1/key` | 余额 |
 | Kimi Code (subscription) | `kimi-coding` | 手工令牌 + 自定义来源 | 需自行配置 | 取决于接口 |
 | Meta (Muse subscription) | `meta` | 手工令牌 + 自定义来源 | 需自行配置 | 取决于接口 |
@@ -86,8 +87,18 @@
 2. 选择本仓库根目录（含 `manifest.json` 的那一层）。
 3. 之后改动会热重载；**新增/放宽权限需要重新加载目录**。
 
-装好后：右侧工作面板的视图菜单里会出现 **订阅额度**；
-命令面板（`Ctrl+K`）执行 **Subscription Quotas: Open Panel** 可打开独立面板窗口。
+装好后：右侧工作面板的视图菜单里会出现 **订阅额度**；命令面板（`Cmd/Ctrl+K`）执行 **订阅额度：打开完整面板** 也可打开。
+
+## 两种展示方式
+
+浮层采用圆角纯白背景、黑色文字和青绿色渐变进度条，打开和关闭时分别播放 180ms 渐入、渐出动画；系统开启减少动态效果时不播放。工具栏按钮无边框、无背景，文字随深浅色主题适配。独立悬浮小组件已移除。
+
+- **主窗口浮层**：点击聊天输入框左侧额度按钮，在主窗口右下角展开各账号额度；点击「关闭」或浮层内按 Esc 收起。在「对话框显示」下拉框选择订阅账号，按钮即显示该服务商的最紧张窗口；选择会持久保存。选择「自动」则显示全部账号中最紧张的窗口。这只改变额度展示，不切换对话模型或登录账号。
+- **完整面板**：保留右侧工作面板，用于账号管理和 Go Key 配置。从右侧工作面板菜单选择「订阅额度」，或使用命令面板打开。浮层不再提供完整面板按钮；刷新图标与更新时间位于标题行，与订阅额度标题和 X 关闭按钮同排，右上角 X 图标关闭浮层。
+
+默认每 **60 秒**联网刷新；升级首次加载时将旧间隔迁移为一分钟，之后仍可在设置中调整。浮层每 5 秒读取缓存，手工「刷新」立即触发后台查询。过重置时间的窗口显示待更新。详情最多展开 30 个账号，并受 renderer RPC 大小限制；超限时会提示，摘要仍按全量计算，其他账号请在完整面板查看。
+
+升级后必须重新加载插件并批准新增的 **`renderer.extension`** 高风险权限；它允许插件在宿主窗口绘制工具栏与浮层。不批准则无法使用工具栏浮层。本版最低要求 PI-Desktop **0.21.0**（当前核实的宿主版本），旧版宿主需要升级。
 
 ## 不安装 CLI：在插件中登录
 
@@ -114,6 +125,28 @@
   **授权能力不等于有额度接口**，本次不虚构这四家的 OAuth/额度支持。
 
 
+### OpenCode Go 订阅额度
+
+1. 重新加载开发插件目录或安装新版插件包，并批准新增的 `opencode.ai` 网络访问。
+2. 打开额度面板 → **管理账号** → **OpenCode Go**，粘贴 Go API Key 后点击 **保存并刷新**。没有 Key 时此区块也会显示。
+   也可在插件设置的 **手工令牌（credentials）** 中填入：
+   ```json
+   { "opencode-go": "你的 OpenCode Go API Key" }
+   ```
+   如果已有其他服务商配置，只添加 `opencode-go` 字段，不要覆盖原有字段。
+3. 回到额度面板点击刷新，即可显示 5 小时、每周、每月的剩余百分比、进度条和重置倒计时。接口未返回的窗口不显示。
+
+也可在 OpenCode 中连接 **OpenCode Go** 后，开启插件的「自动发现 CLI / 编辑器账号」。插件读取
+`$XDG_DATA_HOME/opencode/auth.json`（未设置时为 `~/.local/share/opencode/auth.json`）中的
+`opencode-go: { "type": "api", "key": "…" }`。手工 Key 优先，关闭自动发现后不读取该文件。
+
+**自动发现只读取 OpenCode CLI 凭据，不读取 PI-Desktop 服务商设置中的 Key。** 当前宿主插件 API 不提供读取该密钥的接口；仅在宿主设置过 Key 的用户，需要在上述面板入口再填写一次。
+
+此功能使用 Go 的 `GET /zen/go/v1/usage`，不是在 OpenCode 中登录的 ChatGPT/Claude 额度，也不是 Zen 按量付费余额。
+无需配置 `sources`，不支持通过「管理账号」为 OpenCode 发起 OAuth。Key 仅发送给 `opencode.ai`，不返回面板；手填 Key 使用宿主插件设置存储，不属于插件 OAuth 加密存储。
+接口的 `usage.rolling/weekly/monthly.percent` 是已用百分比（`1` 表示 1%），`resetsAt` 为重置时间；缺少重置时间时不显示倒计时。
+接口格式参考 [CodexBar OpenCode 文档](https://github.com/steipete/CodexBar/blob/main/docs/opencode.md)。该接口未列入 OpenCode 的稳定公开 API 文档，可能随上游变更。
+
 ### 多账号与优先级
 
 1. 在「管理账号」选择服务商，点击 **添加账号**（账号名会自动显示检测到的用户名/邮箱）。
@@ -136,6 +169,7 @@
 | `anthropic` | `$CLAUDE_CONFIG_DIR/.credentials.json`、`~/.claude/.credentials.json` |
 | `openai-codex` | `~/.codex/auth.json`（`tokens.access_token` + `tokens.account_id`） |
 | `github-copilot` | `~/.config/github-copilot/hosts.json`、`…/apps.json`、`%APPDATA%\github-copilot\hosts.json`、`%LOCALAPPDATA%\github-copilot\hosts.json` |
+| `opencode-go` | `$XDG_DATA_HOME/opencode/auth.json` 或 `~/.local/share/opencode/auth.json`（只读 `opencode-go` 的 API Key） |
 | 其余 | 无可发现路径，只认手工令牌 |
 
 CLI 回退只读取上表的明确路径，不遍历目录。关闭「自动发现 CLI / 编辑器账号」即可停止读取；不影响插件独立授权和手工令牌。
@@ -160,7 +194,8 @@ CLI 回退只读取上表的明确路径，不遍历目录。关闭「自动发�
   "openrouter": "sk-or-v1-...",
   "anthropic": "...",
   "openai-codex": "...",
-  "github-copilot": "ghu_..."
+  "github-copilot": "ghu_...",
+  "opencode-go": "你的 OpenCode Go API Key"
 }
 ```
 

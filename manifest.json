@@ -3,7 +3,7 @@
   "id": "io.github.czp0312.subscription-quota",
   "name": "订阅额度",
   "version": "0.4.2",
-  "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
+  "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic、OpenAI、GitHub Copilot、OpenCode Go、OpenRouter 等，显示各周期剩余百分比、重置倒计时与进度条。只显示已配置或本机已登录的账号。",
   "author": "czp0312",
   "repository": "https://github.com/czp0312/pi-desktop-quota-visualizer",
   "homepage": "https://github.com/czp0312/pi-desktop-quota-visualizer#readme",
@@ -14,25 +14,19 @@
   "i18n": {
     "en": {
       "name": "Subscription Quotas",
-      "description": "Visualize the remaining quota of your subscription accounts in the work panel — Anthropic (Claude Pro/Max), OpenAI (ChatGPT Plus/Pro), GitHub Copilot, OpenRouter and more — as 5-hour / weekly / monthly / credit windows with remaining percentage, reset countdown and a progress bar (green = remaining, grey = used). Only accounts signed in on this machine are shown.",
+      "description": "Visualize remaining subscription quotas for Anthropic, OpenAI, GitHub Copilot, OpenCode Go, OpenRouter and more, with per-window percentages, reset countdowns and progress bars. Only configured or locally signed-in accounts are shown.",
       "safetyNotes": "Plugin OAuth accounts and manual tokens are displayed separately; optional CLI credentials are a fallback. Priorities and quota recommendations are advisory only and never switch host chat accounts. Never reads PI-Desktop's secret store. OAuth tokens are encrypted via Node fs in this plugin's getDataPath directory (quota-oauth.enc); quota-oauth.key is stored alongside it, so protection relies on OS file permissions, not an OS keychain. During browser login Node HTTP listens only on 127.0.0.1:1455/53692 and closes on completion or timeout. Tokens are never logged or returned to the panel. Requests use net.fetch's allowlist; shell.openExternal opens vendor authorization pages. Account emails/usernames come from locally parsed OAuth tokens, same-origin vendor endpoints (Claude /api/oauth/profile) and quota responses, with no new network domains and no logging. Removal deletes only the selected plugin account, not host/CLI logins or vendor grants."
     },
     "zh-CN": {
       "name": "订阅额度",
-      "description": "在工作面板中可视化订阅账号的剩余额度：Anthropic (Claude Pro/Max)、OpenAI (ChatGPT Plus/Pro)、GitHub Copilot、OpenRouter 等，按 5 小时 / 每周 / 每月 / 余额窗口显示剩余百分比、重置倒计时与进度条（绿=剩余、灰=已用）。只显示本机已登录的账号。",
+      "description": "可视化 Anthropic、OpenAI、GitHub Copilot、OpenCode Go、OpenRouter 等账号额度，按周期显示剩余百分比、重置倒计时与进度条。",
       "safetyNotes": "插件 OAuth 多账号与手工令牌分别显示，CLI 凭据仅作回退。优先级和推荐仅供手动切换，不改变宿主对话账号。不读取 PI-Desktop 密钥库。OAuth 令牌在本插件数据目录加密保存，本地密钥同目录保存，依赖系统文件权限，不等同系统钥匙串。登录期间仅监听 127.0.0.1:1455/53692，结束或超时关闭。令牌不写日志、不返回界面；联网受域名白名单约束。删除只清选中插件账号，不影响宿主/CLI 或服务商授权。"
     }
   },
   "main": "main.js",
-  "ui": {
-    "panel": "views/quota.html",
-    "title": {
-      "en": "Subscription Quotas",
-      "zh-CN": "订阅额度"
-    },
-    "width": 540,
-    "height": 680
-  },
+  "renderer": "renderer/index.mjs",
+  "rendererActions": ["plugin.call"],
+  "rendererCallMethods": ["compact", "selectAccount", "details"],
   "contributes": {
     "views": [
       {
@@ -49,7 +43,7 @@
     "commands": [
       {
         "id": "quota.open",
-        "title": "Subscription Quotas: Open Panel",
+        "title": "订阅额度：打开完整面板",
         "keywords": [
           "quota",
           "usage",
@@ -59,7 +53,8 @@
           "claude",
           "chatgpt",
           "copilot",
-          "openrouter"
+          "openrouter",
+          "opencode"
         ],
         "category": "Subscription"
       }
@@ -68,7 +63,7 @@
       {
         "key": "autoDetect",
         "title": "自动发现 CLI / 编辑器账号",
-        "description": "作为回退读取 Claude Code / Codex / Copilot 凭据文件。关闭后仍查询本插件授权和手工令牌账号。无需安装 CLI，可在面板的管理账号中单独登录。",
+        "description": "作为回退读取 Claude Code / Codex / Copilot / OpenCode Go 凭据文件。关闭后仍查询本插件授权和手工令牌账号。ChatGPT / Claude / Copilot 可在管理账号中单独登录。",
         "type": "boolean",
         "default": true
       },
@@ -84,12 +79,12 @@
         "title": "自动刷新间隔（秒）",
         "description": "面板打开时轮询新数据的间隔，最小 30 秒。",
         "type": "number",
-        "default": 300
+        "default": 60
       },
       {
         "key": "credentials",
         "title": "手工令牌（JSON 对象）",
-        "description": "厂商 id → 令牌。例如 {\"openrouter\":\"sk-or-...\",\"anthropic\":\"...\",\"openai-codex\":\"...\",\"github-copilot\":\"...\",\"kimi-coding\":\"...\",\"meta\":\"...\",\"radius\":\"...\",\"xai\":\"...\"}。填了才算已登录。",
+        "description": "厂商 id → 令牌。例如 {\"opencode-go\":\"你的 OpenCode Go API Key\",\"openrouter\":\"sk-or-...\",\"anthropic\":\"...\",\"openai-codex\":\"...\",\"github-copilot\":\"...\"}。OpenCode Go 无需配置自定义来源。",
         "type": "json",
         "default": {}
       },
@@ -109,7 +104,7 @@
       }
     ]
   },
-  "permissions": ["ui.view", "ui.panel", "net.fetch", "shell.openExternal"],
+  "permissions": ["ui.view", "net.fetch", "shell.openExternal", "renderer.extension"],
   "net": {
     "domains": [
       "auth.openai.com",
@@ -119,6 +114,7 @@
       "chatgpt.com",
       "api.github.com",
       "openrouter.ai",
+      "opencode.ai",
       "api.kimi.com",
       "api.meta.ai",
       "radius.pi.dev",
@@ -126,7 +122,7 @@
     ]
   },
   "engines": {
-    "piDesktop": ">=0.9.0"
+    "piDesktop": ">=0.21.0"
   },
   "activationEvents": ["onStartup", "onCommand:quota.open"]
 }

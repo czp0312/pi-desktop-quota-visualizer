@@ -553,6 +553,19 @@
         <p id="auth-disabled" role="status" hidden></p>
         <p id="auth-add-help"></p>
         <div id="auth-accounts"></div>
+        <section class="qa-group" id="opencode-group" aria-labelledby="opencode-title">
+          <h3 id="opencode-title">OpenCode Go</h3>
+          <p id="opencode-help"></p>
+          <form id="opencode-form">
+            <label for="opencode-key" id="opencode-key-label">OpenCode Go API Key</label>
+            <input class="qa-input" id="opencode-key" type="password" autocomplete="off" spellcheck="false" maxlength="8192" />
+            <div class="qa-actions">
+              <button class="qp-btn" id="opencode-save" type="submit">保存并刷新</button>
+              <button class="qp-btn" id="opencode-remove" type="button">移除手工 Key</button>
+            </div>
+          </form>
+          <p id="opencode-status" role="status" aria-live="polite"></p>
+        </section>
         <div class="qa-actions"><button class="qp-btn" id="auth-check" type="button"></button></div>
         <p id="auth-status" role="status" aria-live="polite" aria-atomic="true"></p>
         <p class="qa-error" id="auth-error" role="alert" hidden></p>
@@ -702,6 +715,11 @@
             callback: "浏览器回调由 127.0.0.1 本机接收。若自动回调失败，可粘贴最终跳转的完整 localhost URL（必须包含 state）。",
             logoutHelp: "删除仅清除本插件中此账号的授权，不退出或修改宿主 / CLI，也不删除手动令牌；其他来源的账号可能继续显示。",
             other: "OpenRouter：仍需在插件设置中手动填写 API Key。Kimi / Meta / Radius / xAI：仍需配置自定义来源，此处不提供 OAuth 登录。",
+            goHelp: "OpenCode Go：粘贴 Go API Key 后保存，即可显示 5 小时 / 周 / 月额度。也可自动发现 OpenCode CLI 凭据，但不能读取 PI-Desktop 服务商设置中的 Key。Key 保存到插件设置，不使用 OAuth；Zen 按量付费余额不属于此额度。",
+            goSave: "保存并刷新", goRemove: "移除手工 Key", goSaving: "正在保存…",
+            goSaved: "Key 已保存，已请求刷新额度；如查询失败请查看额度卡片。", goRemoved: "已移除手工 Key；开启自动发现时仍可能显示 CLI 账号。",
+            goFailed: "OpenCode Go 配置失败，请重试。", goInvalid: "请输入 OpenCode Go API Key。",
+            goConnected: "已识别 OpenCode Go 凭据", goMissing: "未配置 Go API Key，也未发现 CLI 凭据。",
             blocked: "离线预览和演示模式不支持真实授权。请在 PI-Desktop 中退出演示后使用。",
             loading: "正在读取插件授权状态…", unknown: "授权状态未知", ready: "可选择账号独立授权；同一时间只能进行一个登录。",
             connected: "插件已授权", disconnected: "插件未授权", add: "添加账号", again: "重新授权", logout: "删除本插件授权",
@@ -722,6 +740,11 @@
             callback: "Browser callbacks are received locally at 127.0.0.1. If the automatic callback fails, paste the complete final localhost redirect URL (including state).",
             logoutHelp: "Deletion removes only this account's plugin authorization, not host / CLI sessions or manual tokens. Accounts from other sources may still appear.",
             other: "OpenRouter still requires a manual API Key in plugin settings. Kimi / Meta / Radius / xAI still require custom sources; OAuth is not offered here.",
+            goHelp: "OpenCode Go: save a Go API Key to display 5-hour / weekly / monthly quotas, or discover OpenCode CLI credentials. PI-Desktop provider keys cannot be read through the plugin API. Keys are stored in plugin settings, not OAuth storage. Zen PAYG balance is separate.",
+            goSave: "Save and refresh", goRemove: "Remove manual key", goSaving: "Saving…",
+            goSaved: "Key saved; quota refresh requested. Check the quota card for any query error.", goRemoved: "Manual key removed; CLI discovery may still show an account.",
+            goFailed: "Could not configure OpenCode Go. Please retry.", goInvalid: "Enter an OpenCode Go API Key.",
+            goConnected: "OpenCode Go credentials detected", goMissing: "No Go API Key configured or CLI credentials detected.",
             blocked: "Real authorization is disabled in offline preview and demo mode. Open in PI-Desktop and exit demo to continue.",
             loading: "Reading plugin authorization status…", unknown: "Authorization status unknown", ready: "Choose an account to authorize independently. Only one sign-in can run at a time.",
             connected: "Plugin authorized", disconnected: "Plugin not authorized", add: "Add account", again: "Authorize again", logout: "Delete plugin authorization",
@@ -749,6 +772,8 @@
         let authInputLogin = null;
         let authRefreshNeeded = false;
         const authRefreshed = new Set();
+        let opencodeBusy = false;
+        let opencodeMessage = "";
         const authBlocked = () => standalone || !snapshot || !!snapshot.demo;
         const authPending = () => !!(authData && authData.login && ["starting", "waiting", "exchanging"].includes(authData.login.status));
 
@@ -869,6 +894,14 @@
             "auth-submit": c.submit, "auth-input-label": c.input, "auth-code-label": c.code,
           };
           for (const [id, value] of Object.entries(labels)) authText(id, value);
+          authText("opencode-help", c.goHelp);
+          authText("opencode-save", opencodeBusy ? c.goSaving : c.goSave);
+          authText("opencode-remove", c.goRemove);
+          authText("opencode-status", opencodeMessage || (snapshot?.accounts?.some((a) => a.provider === "opencode-go") ? c.goConnected : c.goMissing));
+          el("opencode-save").disabled = blocked || opencodeBusy;
+          el("opencode-remove").disabled = blocked || opencodeBusy;
+          el("opencode-key").disabled = blocked || opencodeBusy;
+          if (blocked) el("opencode-key").value = "";
           el("auth-disabled").hidden = !blocked;
           el("auth-check").disabled = blocked || authBusy;
           renderAuthAccounts(blocked, pending);
@@ -950,9 +983,39 @@
             void authRequest("status");
           } else {
             el("auth-input").value = "";
+            el("opencode-key").value = "";
             el("auth-toggle").focus();
           }
         }
+
+        async function configureOpenCode(remove = false) {
+          if (authBlocked() || opencodeBusy) return;
+          const token = el("opencode-key").value.trim();
+          if (!remove && !token) {
+            opencodeMessage = authCopy().goInvalid;
+            renderAuth();
+            el("opencode-key").focus();
+            return;
+          }
+          opencodeBusy = true;
+          opencodeMessage = "";
+          el("opencode-key").value = "";
+          renderAuth();
+          try {
+            const result = await bridgeInvoke("quota.opencode.configure", remove ? { remove: true } : { token });
+            if (!result?.ok) throw new Error("configuration failed");
+            authRefreshNeeded = true;
+            flushAuthRefresh();
+            opencodeMessage = remove ? authCopy().goRemoved : authCopy().goSaved;
+          } catch {
+            opencodeMessage = authCopy().goFailed;
+          } finally {
+            opencodeBusy = false;
+            renderAuth();
+          }
+        }
+        el("opencode-form").addEventListener("submit", (event) => { event.preventDefault(); void configureOpenCode(); });
+        el("opencode-remove").addEventListener("click", () => { void configureOpenCode(true); });
 
         el("auth-toggle").addEventListener("click", () => showAuth(!authVisible));
         el("auth-close").addEventListener("click", () => showAuth(false));
@@ -1291,7 +1354,7 @@
             ok: true,
             demo: true,
             autoDetect: false,
-            refreshSeconds: 300,
+            refreshSeconds: 60,
             generatedAt: new Date(now).toISOString(),
             accounts: [
               {
@@ -1349,7 +1412,7 @@
           if (pollTimer) clearTimeout(pollTimer);
           const seconds = Math.max(
             30,
-            Number(snapshot && snapshot.refreshSeconds) || 300,
+            Number(snapshot && snapshot.refreshSeconds) || 60,
           );
           pollTimer = setTimeout(() => {
             void load({ silent: true });
@@ -1369,12 +1432,12 @@
               if (result && result.ok) {
                 snapshot = result;
               } else if (!snapshot) {
-                snapshot = { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 300 };
+                snapshot = { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 60 };
               }
             }
           } catch (error) {
             if (!snapshot) {
-              snapshot = { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 300 };
+              snapshot = { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 60 };
             }
           } finally {
             loading = false;
@@ -1386,7 +1449,7 @@
 
         async function setDemo(enabled) {
           if (standalone) {
-            snapshot = enabled ? DEMO_SNAPSHOT : { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 300 };
+            snapshot = enabled ? DEMO_SNAPSHOT : { ok: true, accounts: [], generatedAt: null, autoDetect: true, refreshSeconds: 60 };
             render();
             return;
           }
